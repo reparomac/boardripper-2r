@@ -1,0 +1,2116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./logo.svg" />
+    <!-- iOS ignores SVG manifest icons: without this, "Add to Home Screen"
+         gets a page screenshot. Installing is also what exempts the site from
+         Safari's 7-day storage eviction, so the install path must look real. -->
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="BoardRipper" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#0b0f14" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>BoardRipper</title>
+    <!-- 2R 24/10/2026: contornos reais de placas parecidas (placas cujo arquivo traz só o retângulo) -->
+    <script src="./r2-contornos.js"></script>
+    <script type="module" crossorigin src="./assets/index-BscvDDFO.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-I3MT3-ur.css">
+  <style>/* BDV só do servidor (Roger, 26/10/2026): sem a aba «Local» (biblioteca deste computador) */
+.r2-acvseg{display:none!important}
+.activity-rail-item[data-sidebar-tab="library"]{display:none!important}
+</style>
+<style>/* editor do passo (Roger, 26/10/2026): cabeçalho com grupo e passo exato */
+.r2gd-edhead{display:block;padding:6px 9px;margin:2px 0 8px;border-left:3px solid #9A9DA5;background:rgba(255,255,255,.05);border-radius:4px;font-size:12.5px;color:#EDEDED}
+.r2gd-edhead b{color:#FFFFFF}
+.r2gd-edname{display:block;color:#9A9DA5;font-size:11.5px;margin-top:2px}
+.r2gd-edinfo{display:block;color:#9A9DA5;font-size:11px;margin:2px 0 6px}
+.r2gd-gname{display:block;font-size:11px;font-weight:700;letter-spacing:.02em;margin-bottom:2px}
+.r2gd-hud-grp{display:block;font-size:11px;font-weight:700;border-left:3px solid;padding:1px 0 1px 6px;margin-bottom:3px}
+.r2gd-hud-grp.novo{background:rgba(255,255,255,.07)}
+</style>
+<script>/* Valores do ponto a ponto no padrão do SDS (Roger, 26/10/2026: «pode ser com vírgula ou ponto, acho bom
+   travar no padrão do SDS»): aceita 3,3 · 3.3 · 3,3V · 10k · 1,2M · 100R · OL e grava como o multímetro grava
+   (tensão/diodo com 3 casas e ponto; resistência 10.00k / 1.20M). Inválido → null. */
+window.__r2Num = function (k, s) {
+  /* 26/10/2026 18h (Roger: «o padrão é com vírgula, e vamos manter a tensão com duas casas decimais e sempre add o V»):
+     tensão «3,30 V» · diodo «0,512» · resistência «10,00k» / «1,20M» / «100,0» */
+  s = String(s == null ? '' : s).trim(); if (!s) return '';
+  var u = s.toUpperCase().replace(/\s+/g, '').replace(/Ω/g, '');
+  if (u === 'OL' || u === 'O.L' || u === 'O.L.') return 'OL';
+  u = u.replace(/(OHMS|OHM|VOLTS|VOLT|V|R)$/, '');
+  var m = /^([-+]?\d+(?:[.,]\d+)?)([KM])?$/.exec(u); if (!m) return null;
+  var n = parseFloat(m[1].replace(',', '.')); if (m[2] === 'K') n *= 1e3; if (m[2] === 'M') n *= 1e6;
+  var c = function (x) { return x.replace('.', ','); };
+  if (k === 'r' || k === 'ir') { var a = Math.abs(n); return c(a >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : a >= 1e3 ? (n / 1e3).toFixed(2) + 'k' : n.toFixed(1)); }
+  if (k === 'd' || k === 'id') return c(n.toFixed(3));
+  return c(n.toFixed(2)) + ' V';
+};
+/* número de um valor gravado (aceita vírgula, unidade, k/M) */
+window.__r2V = function (s) {
+  var m = /([-+]?\d+(?:[.,]\d+)?)\s*([kKmM])?/.exec(String(s || '')); if (!m) return null;
+  var n = parseFloat(m[1].replace(',', '.')); if (m[2] === 'k' || m[2] === 'K') n *= 1e3; if (m[2] === 'M') n *= 1e6; return n;
+};
+/* unidade só se ainda não tem */
+window.__r2U = function (v, u) { var s = String(v == null ? '' : v); return /(V|Ω)\s*$/.test(s) ? s : s + ' ' + u; };
+/* nome do ponto na linha (26/10/2026): peças sem nome no boardview aparecem como «....1» — aí mostra a net */
+window.__r2Lbl = function (F, cur) {
+  var R = cur || F, l = R.points && R.points[0] && R.points[0].label || '';
+  if (!l || /^\.+/.test(l)) { var nt = (R.step && R.step.nets && R.step.nets[0]) || ''; return nt || l; }
+  return l;
+};
+/* anotações do ponto a ponto de um estudo vão para o grupo (Roger, 26/10/2026) */
+window.__r2Anot = function (R, i, ch) {
+  try {
+    if (!R || !/^estudo-/.test(String(R.id || ''))) return;
+    var K = ['tipo', 'iv', 'id', 'ir', 'v', 'd', 'r', 'note'];
+    if (!Object.keys(ch || {}).some(function (k) { return K.indexOf(k) >= 0; })) return;
+    var st = R.steps[i]; if (!st || !st.n) return;
+    var c = {}; K.forEach(function (k) { c[k] = st[k] == null ? '' : String(st[k]); });
+    var a = window.__2rMeterApi; if (a && a.estudoAnot) a.estudoAnot({ id: R.id, n: st.n, c: c }).catch(function () {});
+  } catch (e) {}
+};
+/* Grupos no ponto a ponto (Roger, 26/10/2026: «ter como opção dividir por grupos ou sem… se for por grupo, o nome do
+   passo tem que seguir o mesmo do grupo… quando sair de um grupo já informar que é outro… ou por cor um aviso no card») */
+window.__r2GrpOn = function () { try { return localStorage.getItem('2r-pp-grupos') !== '0'; } catch (e) { return true; } };
+window.__r2GrpSet = function (on) { try { localStorage.setItem('2r-pp-grupos', on ? '1' : '0'); } catch (e) {} };
+window.__r2GCores = ['#5B8DEF', '#E8A13A', '#6FAE7D', '#E879A6', '#22B8CF', '#A78BFA', '#EF7B6F', '#A3C95A'];
+window.__r2GInfo = function (R, i) {
+  try {
+    var st = R && R.steps && R.steps[i]; if (!st || !st.gid || !(st.gm > 1)) return null;
+    var gn = st.gn || 0, nome = st.grupo || '';
+    if (!nome) { for (var k = 0; k < R.steps.length; k++) { var x = R.steps[k]; if (x.gid === st.gid && x.gk === 1) { nome = x.grupo || x.name || ''; break; } } }
+    var prev = i > 0 ? R.steps[i - 1] : null;
+    return { gn: gn, gk: st.gk || 1, gm: st.gm, nome: String(nome).slice(0, 90), cor: window.__r2GCores[(gn > 0 ? gn - 1 : 0) % window.__r2GCores.length],
+             novo: !!(st.gk === 1 && prev && prev.gid !== st.gid) };
+  } catch (e) { return null; }
+};
+window.__r2GrpUlt = null;
+window.__r2GrpMudou = function (R, i) {
+  try {
+    var st = R && R.steps && R.steps[i]; var gid = st && st.gid || null;
+    if (window.__r2GrpUlt !== null && gid && gid !== window.__r2GrpUlt) {
+      var GI = window.__r2GInfo(R, i);
+      if (GI && window.__2rToast) window.__2rToast('Novo grupo: ' + String(GI.gn).padStart(2, '0') + (GI.nome ? ' — ' + GI.nome : '') + ' (' + GI.gm + ' passos)', 'info');
+    }
+    window.__r2GrpUlt = gid;
+  } catch (e) {}
+};
+/* Roda do MOUSE (Roger, 27/10/2026: «coloca uma opção de selecionar a inversão do scroll»): o sentido é a escolha
+   «Inverter a roda do mouse» do painel Mouse e trackpad (localStorage 2r-mouse-invert), na placa e no PDF.
+   Trackpad não muda. (26/10 era invertido sempre.) */
+window.__r2RodaK = function (e) {
+  try {
+    var w = e.wheelDeltaY;
+    var tp = e.deltaX !== 0 || (w !== undefined && w !== 0 ? (w % 120 !== 0 && (e.deltaY % 1 !== 0 || w === -3 * e.deltaY)) : e.deltaY % 1 !== 0);
+    if (tp || e.ctrlKey) return 1;
+    var mouse = e.deltaMode === 1 || (w !== undefined && w !== 0 && w % 120 === 0) || (Math.abs(e.deltaY) >= 50 && e.deltaY % 1 === 0);
+    if (!mouse) return 1;
+    return localStorage.getItem('2r-mouse-invert') === '1' ? -1 : 1;
+  } catch (x) { return 1; }
+};
+/* valor esperado na linha do passo */
+window.__r2Esp = function (d, st) {
+  var k = st.tipo || (st.id ? 'd' : st.ir ? 'r' : st.iv ? 'v' : ''); var v = k && st['i' + k];
+  if (!v) return null;
+  return d.jsx('span', { className: 'r2hist-sub', style: { display: 'block', color: '#7FD18B' }, children: 'esperado: ' + (k === 'v' ? window.__r2U(v, 'V') : k === 'r' ? window.__r2U(v, 'Ω') : v + ' (diodo)') });
+};
+</script>
+<script>/* 26/10/2026 (print do Windows): a caixa de busca do Acervo abria a lista branca de «buscas anteriores» do
+   navegador por cima do painel. Desliga o preenchimento automático em todos os campos de texto. */
+(function () {
+  function off(el) { if (el && el.tagName === 'INPUT' && el.getAttribute('autocomplete') !== 'off') el.setAttribute('autocomplete', 'off'); }
+  document.addEventListener('focusin', function (e) { off(e.target); }, true);
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('input').forEach(off);
+    try { new MutationObserver(function () { document.querySelectorAll('input:not([autocomplete="off"])').forEach(off); })
+          .observe(document.body, { childList: true, subtree: true }); } catch (e) {}
+  });
+})();
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <!-- Boot gate. A classic script runs on every engine; the module bundle
+         below fails to PARSE on a browser older than the build target
+         (Safari < 16.4 chokes on a regex lookbehind), so nothing in it can
+         ever show a message. This checks the three things that decide
+         whether the bundle can start and writes a plain paragraph if one
+         is missing. ES5 only: no const/let, arrows or template strings.
+         main.tsx reads window.__brUnsupported and does not mount. -->
+    <script>
+      (function () {
+        var missing = [];
+        if (typeof structuredClone !== 'function') missing.push('structuredClone');
+        if (typeof OffscreenCanvas === 'undefined') missing.push('OffscreenCanvas');
+        try { new RegExp('(?<=a)b'); } catch (e) { missing.push('regular expression lookbehind'); }
+        if (!missing.length) return;
+        window.__brUnsupported = missing;
+        var root = document.getElementById('root');
+        if (!root) return;
+        document.documentElement.style.background = '#08080c';
+        root.innerHTML =
+          '<div style="max-width:560px;margin:48px auto;padding:0 20px;font:14px/1.55 Verdana,Geneva,sans-serif;color:#e0e0e0">' +
+          '<h1 style="font-size:20px;margin:0 0 12px">BoardRipper needs a newer browser</h1>' +
+          '<p>This browser is missing: <b>' + missing.join(', ') + '</b>.</p>' +
+          '<p>Minimum: Chrome or Edge 111, Firefox 114, Safari 16.4, iOS / iPadOS 16.4 (all from spring 2023). ' +
+          'On an iPad or iPhone, updating iOS is the fix &mdash; every browser there uses Safari&rsquo;s engine, Chrome included.</p>' +
+          '<p>If you think it should run on this device, tell me the device and OS version: ' +
+          '<a style="color:#4a9eff" href="https://discord.gg/BYEkKTMNNY">Discord</a> (@inwerp on the RipperDoc server) or ' +
+          '<a style="color:#4a9eff" href="https://github.com/AlexeyInwerp/BoardRipper/issues/new/choose">GitHub</a>.</p>' +
+          '</div>';
+      })();
+    </script>
+  
+    <!-- 2R Tools (15/10/2026): ícone "OBD" — força a busca/leitura dos dados OpenBoardData (diodo, tensão,
+         resistência) da placa aberta. Usa o próprio armazém do BoardRipper (window.__obdStore). -->
+    <script>
+      (function () {
+        function toast(msg) {
+          var t = document.getElementById('2r-obd-toast');
+          if (!t) {
+            t = document.createElement('div'); t.id = '2r-obd-toast';
+            t.style.cssText = 'position:fixed;left:58px;bottom:16px;z-index:2147483647;padding:8px 12px;border-radius:8px;background:rgba(14,16,19,.94);color:#F4F5F7;font:12px/1.3 -apple-system,Segoe UI,sans-serif;border:1px solid #D9A441;max-width:360px;pointer-events:none;transition:opacity .25s';
+            document.body.appendChild(t);
+          }
+          t.textContent = msg; t.style.opacity = '1';
+          clearTimeout(t._h); t._h = setTimeout(function () { t.style.opacity = '0'; }, 5000);
+        }
+        async function force(btn) {
+          var S = window.__obdStore;
+          if (!S) { toast('OBD indisponível nesta versão.'); return; }
+          if (btn._busy) return; btn._busy = true; btn.style.color = '#D9A441';
+          try {
+            toast('OBD: buscando dados da placa…');
+            try { await S.refreshStatus(); } catch (e) {}
+            if (!S._index || !S._index.synced) { toast('OBD: baixando o índice de placas…'); await S.syncIndex(); }
+            var bns = Array.from(S._matchesByBn ? S._matchesByBn.keys() : []).filter(Boolean);
+            if (!bns.length) { toast('OBD: abra uma placa primeiro (número da placa não identificado).'); return; }
+            var variants = 0, got = 0;
+            for (var i = 0; i < bns.length; i++) {
+              S._matchesByBn.delete(bns[i]);
+              var ms = (await S.loadMatches(bns[i])) || [];
+              variants += ms.length;
+              for (var j = 0; j < ms.length; j++) {
+                S._data.delete(ms[j].bpath);
+                var d = await S.fetchBoard(ms[j].bpath);
+                if (d) got++;
+              }
+            }
+            if (S._bump) S._bump();
+            toast(variants ? ('OBD: ' + got + ' de ' + variants + ' variante(s) lidas.') : 'OBD: nenhum dado encontrado para esta placa.');
+          } catch (e) {
+            toast('OBD: falhou (' + (e && e.message ? e.message : e) + ').');
+          } finally { btn._busy = false; btn.style.color = ''; }
+        }
+        function mk() {
+          if (document.getElementById('2r-obd-btn') || !document.body) return;
+          var b = document.createElement('button'); b.id = '2r-obd-btn'; b.type = 'button';
+          b.title = 'Forçar leitura dos dados OBD (OpenBoardData: diodo, tensão e resistência) da placa aberta';
+          var __l=(window.__2rLang||'pt').slice(0,2);
+          b.className = 'activity-rail-item';
+          b.innerHTML = '<span class="activity-rail-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8.1 8.1 0 0 0 -15.5 -2"/><path d="M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2"/><path d="M20 19v-4h-4"/></svg></span><span class="activity-rail-cap">OBD</span>';
+          // 17/10/2026 (Roger): mesmo padrão dos ícones da lateral (classes da própria barra) — cinza; dourado enquanto lê
+          // 20/10/2026 (Roger): «o ícone OBD precisa alinhar junto com os outros» — agora vai dentro da barra, logo abaixo do último ícone
+          b.addEventListener('mouseenter', function () { if (!b._busy) b.style.color = ''; });
+          b.addEventListener('mouseleave', function () { if (!b._busy) b.style.color = ''; });
+          b.addEventListener('click', function () { force(b); });
+          function place() {
+            var rail = document.querySelector('.activity-rail');
+            if (!rail) return;
+            var items = rail.querySelectorAll('.activity-rail-item[data-sidebar-tab]');
+            var last = items.length ? items[items.length - 1] : null;
+            if (!last) return;
+            if (b.previousElementSibling !== last || b.parentNode !== last.parentNode) last.parentNode.insertBefore(b, last.nextSibling);
+          }
+          place(); setInterval(place, 1000); window.addEventListener('resize', place);
+        }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mk); else mk();
+      })();
+    </script>
+  
+    <!-- 2R Tools (20/10/2026): ícone "Estudos" (livro). Lista TODOS os estudos ponto a ponto, separados por placa, no mesmo
+         card da busca do Acervo (placa, modelo, chips). A placa aberta vem primeiro, com Testar / Validado / Com erro.
+         Estudo de outra placa: «Abrir a placa e testar» abre a placa do Acervo e já começa o estudo. -->
+    <script>
+      (function () {
+        'use strict';
+        if (window.__r2EstBtn) return; window.__r2EstBtn = 1;
+        var api = function () { return window.__2rMeterApi || null; };
+        var PAN = null, VAL = {}, QUEM = '', TODOS = null, BUSCA = '', ABERTOS = {};
+        function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+        // placa aberta: o BoardRipper expõe o store em window.__2rBoardGet (21/10/2026). O antigo window.__U nunca existiu —
+        // por isso «Abrir a placa e testar» abria o Acervo e não começava o ponto a ponto (Roger, 21/10/2026)
+        function arquivo() {
+          try { var U = (window.__2rBoardGet && window.__2rBoardGet()) || window.__U; return (U && U.activeTab && U.activeTab.fileName) || ''; } catch (e) { return ''; }
+        }
+        function placa() {
+          var f = arquivo(), m = /(820-\d{4,5})/i.exec(f); if (m) { window.__r2PlacaExtra = ''; return m[1].toUpperCase(); }
+          // arquivo sem «820-…» no nome (ex.: o A1278 820-3115 do Acervo): reconhece pelo nome do arquivo do Acervo (21/10/2026)
+          var b = String(f || '').split(/[\\/]/).pop().toLowerCase(), hit = '';
+          if (b) (TODOS || []).forEach(function (g) { if (!hit && g.arquivo && String(g.arquivo).toLowerCase() === b) hit = g.board; });
+          if (!hit && b) { try { var pz = JSON.parse(localStorage.getItem('r2est-pend') || 'null'); if (pz && pz.arquivo && pz.arquivo.toLowerCase() === b) hit = pz.board; } catch (e) {} }
+          window.__r2PlacaExtra = hit ? String(hit).toUpperCase() : '';   // o ponto a ponto também reconhece a placa
+          return window.__r2PlacaExtra;
+        }
+        function css() {
+          if (document.getElementById('r2est-css')) return;
+          var st = document.createElement('style'); st.id = 'r2est-css';
+          st.textContent =
+            '#r2est{position:fixed;z-index:9000;width:460px;max-height:80vh;display:flex;flex-direction:column;background:var(--bg-secondary,#18191c);color:var(--text-primary,#e8e8e8);' +
+            'border:1px solid var(--border,#3a3b40);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.45);font:13px/1.4 Inter,-apple-system,"Segoe UI",sans-serif}' +
+            '#r2est .r2est-grip{position:absolute;top:0;right:0;width:7px;height:100%;cursor:col-resize;z-index:5}' +
+            '#r2est .r2est-grip:hover,#r2est .r2est-grip.on{background:rgba(255,255,255,.35)}' +
+            '#r2est.doca{max-height:none;border-radius:0;box-shadow:none;border-width:0 1px 0 0}' +
+            '#r2est.doca .lista{flex:1 1 auto;min-height:0}' +
+            '#r2est .topo{padding:12px 12px 8px;border-bottom:1px solid var(--border,#3a3b40)}' +
+            '#r2est h3{margin:0 0 8px;font-size:14px;font-weight:700;display:flex;justify-content:space-between;align-items:center}' +
+            '#r2est h3 small{font-weight:400;color:var(--text-secondary,#9a9a9a);font-size:12px;margin-left:6px}' +
+            '#r2est .x{background:none;border:0;color:var(--text-secondary,#aaa);font-size:18px;cursor:pointer}' +
+            '#r2est input.busca{width:100%;box-sizing:border-box;background:var(--bg-primary,#141518);color:inherit;border:1px solid var(--border,#3a3b40);border-radius:6px;padding:6px 9px;font:inherit}' +
+            '#r2est .lista{overflow:auto;padding:8px 12px 12px}' +
+            '#r2est .vazio{color:var(--text-secondary,#aaa);padding:10px 2px}' +
+            '#r2est .grupo{margin:0 0 10px}' +
+            '#r2est{overflow:hidden}#r2est .lista{flex:1 1 0;min-height:0}#r2est .topo,#r2est .r2est-sync{flex:0 0 auto}#r2est .r2est-sync{border-top:1px solid var(--border,#3a3b40);padding:8px 12px 10px}#r2est .r2est-sync .bar{height:5px;border-radius:3px;background:var(--bg-tertiary,#2a2b30);overflow:hidden}#r2est .r2est-sync .bar i{display:block;height:100%;width:0;background:#D4B26A;transition:width .3s}#r2est .r2est-sync .bar.dif i{background:#5b8def}#r2est .r2est-sync .lin2{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:6px}#r2est .r2est-sync .txt{color:var(--text-secondary,#9a9a9a);font-size:11.5px}' +
+            '#r2est details.cred{margin-top:2px}#r2est details.cred summary{cursor:pointer;color:var(--text-secondary,#9a9a9a);font-size:11.5px;list-style:none}#r2est details.cred summary::-webkit-details-marker{display:none}#r2est details.cred summary:hover{color:#D4B26A}' +
+            '#r2est .r2acv-card-board{color:#D4B26A}#r2est .r2est-mod{font-weight:700;font-size:12px;letter-spacing:.06em;color:#D4B26A;margin:12px 0 6px;border-bottom:1px solid var(--border,#3a3b40);padding-bottom:3px}' +
+            '#r2est .grupo .r2acv-card{width:100%}' +
+            '#r2est .grupo.aberta .r2acv-card{border-color:#D4B26A}' +
+            '#r2est .est{border:1px solid var(--border,#34353a);border-top:0;border-radius:0 0 6px 6px;padding:8px 10px;margin:-2px 0 0;background:var(--bg-primary,#1d1e22)}' +
+            '#r2est .est + .est{margin-top:0;border-radius:0 0 6px 6px}' +
+            '#r2est .est.pp{box-shadow:inset 3px 0 0 #D4B26A;background:rgba(212,178,106,.06)}#r2est .pp-tag{font-size:10px;font-weight:800;letter-spacing:.1em;color:#D4B26A;margin-bottom:2px}#r2est .pp-vazio{font-size:11.5px;color:var(--text-secondary,#8a8d93);padding:8px 10px;border:1px dashed var(--border,#3a3b40);border-top:0;font-style:italic}#r2est .sep-casos{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-secondary,#8a8d93);padding:8px 10px 4px;border-left:1px solid var(--border,#34353a);border-right:1px solid var(--border,#34353a)}#r2est .res{color:var(--text-secondary,#a7a9ae);font-size:12px;line-height:1.4;margin-top:3px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}#r2est .t{font-weight:700;font-size:13px}#r2est .c{color:var(--text-secondary,#9a9a9a);font-size:11.5px;margin-top:2px}' +
+            '#r2est .lin{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}' +
+            /* cards padronizados (21/10/2026): cada estudo é um card inteiro, com os mesmos botões */
+            '#r2est .est,#r2est .est + .est{border:1px solid var(--border,#34353a);border-radius:8px;margin:6px 0 0;padding:9px 11px}' +
+            '#r2est .est.vazio{cursor:default!important;opacity:.8;border-style:dashed}#r2est .est.vazio:hover{background:var(--bg-primary,#1d1e22)}' +
+            '#r2est .sep-casos{border:0!important;padding:10px 2px 0!important}#r2est .lin.acoes{margin-top:8px}' +
+            '#r2est button.b.ver{background:transparent;border-color:rgba(212,178,106,.45);color:var(--text-primary,#e8e8e8);font-weight:600}' +
+            '#r2est button.b.ver:hover{border-color:#D4B26A;color:#D4B26A}' +
+            '#r2est button.b{border:1px solid var(--border,#4a4b52);background:var(--bg-tertiary,#2a2b30);color:inherit;border-radius:6px;padding:4px 9px;font:inherit;font-size:12px;cursor:pointer}' +
+            '#r2est button.b:hover{border-color:#D4B26A;color:#D4B26A}#r2est button.b.pri{background:rgba(212,178,106,.16);border-color:#D4B26A;color:#D4B26A;font-weight:700}#r2est button.b.pri:hover{background:rgba(212,178,106,.26);color:#D4B26A}#r2est .est:hover{background:var(--bg-tertiary,#222327)}' +
+            '#r2est button.ok.on{background:rgba(212,178,106,.16);border-color:#D4B26A;color:#D4B26A}' +
+            '#r2est button.er.on{background:#c0392b;color:#fff;border-color:#c0392b}' +
+            '#r2est .chip{font-size:11px;border-radius:10px;padding:0 8px;border:1px solid var(--border,#4a4b52);color:var(--text-secondary,#bbb)}' +
+            '#r2est .chip.validado{border-color:#D4B26A;color:#D4B26A}#r2est .chip.erro{border-color:#e05a4a;color:#e05a4a}#r2est .chip.testando{border-color:#E0A040;color:#E0A040}' +
+            '#r2est .r2acv-chip.ouro{border-color:#D4B26A;color:#D4B26A}' +
+            '#r2est textarea{width:100%;box-sizing:border-box;margin-top:6px;min-height:42px;background:var(--bg-secondary,#141518);color:inherit;border:1px solid var(--border,#3a3b40);border-radius:6px;padding:6px;font:inherit;font-size:12px;resize:vertical}' +
+            '#r2est .q{color:var(--text-secondary,#888);font-size:11px;margin-top:4px}' +
+            /* estudos juntos por tema (Roger, 26/10/2026): uma cor por fonte, com o nome escrito */
+            '#r2est .fts{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}#r2est .fch{display:inline-flex;align-items:center;gap:5px;font-size:11px;border:1px solid var(--border,#4a4b52);border-radius:10px;padding:1px 8px 1px 6px;color:var(--text-primary,#ddd);background:transparent;cursor:pointer;font-family:inherit}' +
+            '#r2est .fch i{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 8px}#r2est .fch:hover{border-color:var(--c)}#r2est .fch small{color:var(--text-secondary,#999);font-size:10.5px}';
+          document.head.appendChild(st);
+        }
+        function seqDaPlaca() {
+          var seq = window.__r2seq; if (!seq) return [];
+          var l = []; try { l = seq.forOpenBoard(); } catch (e) { l = seq.list || []; }
+          return l.filter(function (r) { return r && (r.estudo || /^estudo-/.test(String(r.id)) || SEQ[r.id]); });
+        }
+        // 21/10/2026 (Roger: «essas sequências vamos mover para o estudos»): as sequências de start (as prontas e as criadas
+        // no Ponto a ponto) aparecem aqui junto dos estudos, agrupadas pelo modelo da placa.
+        var SEQ = {};
+        function juntarSeq(rows) {
+          var seq = window.__r2seq, l = (seq && seq.list) || [];
+          l.forEach(function (r) {
+            if (!r || r.estudo || /^estudo-/.test(String(r.id)) || !(r.steps || []).length) return;
+            var b = r.board || 'SEM PLACA', mod = (r.models && r.models[0]) || ((/\b(A\d{4})\b/.exec(r.title || '') || [])[1] || '');
+            SEQ[r.id] = 1;
+            var g = rows.filter(function (x) { return x.board === b; })[0];
+            if (!g) { g = { board: b, modelo: mod, estudos: [] }; rows.push(g); }
+            if (!g.modelo && mod) g.modelo = mod;
+            if (g.estudos.some(function (e) { return e.id === r.id; })) return;
+            var crS = String(r.credit || r.by || '').split('(')[0].replace(/\s+$/, '');
+            g.estudos.push({ id: r.id, title: 'Sequência de start' /* sem crédito no título (Roger 26/10/2026) */ + String('').replace(/^.*?—\s*/, '').replace(/^./, function (c) { return c.toUpperCase(); }),
+                             modelo: mod, placas: [b], passos: r.steps.length, credit: '', seq: true,
+                             resumo: 'Sequência de start, ' + r.steps.length + ' passos, uma linha por vez.' });
+          });
+          return rows;
+        }
+        function tema(t) { var m = /^\s*[A-Z]\d{4}[^—]*—\s*(.+)$/.exec(String(t || '')); return m ? m[1] : String(t || ''); }
+        function medidos(r) { return ((r && r.steps) || []).filter(function (s) { return s.v || s.d || s.r; }).length; }
+        function abrirGuia(cb) {
+          var tab = document.querySelector('.activity-rail-item[data-sidebar-tab="guide"]');
+          if (tab && tab.getAttribute('aria-pressed') !== 'true' && !tab.classList.contains('active')) tab.click();
+          setTimeout(cb, 250);
+        }
+        function testar(id) {
+          // Roger 21/10/2026: «era pra manter dentro do menu estudo e as marcações do ponto a ponto… sem sair do menu estudo»
+          var xx = achar(id);
+          window.__r2EstRun = { id: id, tema: xx ? tema(xx.e.title) : '', placa: xx ? ((xx.g.modelo ? xx.g.modelo + ' · ' : '') + xx.g.board) : '' };
+          document.body.classList.add('r2-est-run');
+          window.__r2EstProg = Date.now();
+          abrirGuia(function () {
+            var seq = window.__r2seq; if (!seq) return;
+            var t0 = Date.now();
+            (function tenta() {
+              if ((seq.list || []).some(function (x) { return x.id === id; })) { seq.open(id); seq.start(); }
+              else if (Date.now() - t0 < 4000) setTimeout(tenta, 150);
+            })();
+          });
+          var v = VAL[id];
+          var e = achar(id);
+          if ((!v || !v.status) && e) salvar(e, 'testando', '', true);
+        }
+        function achar(id) {
+          var out = null;
+          (TODOS || []).forEach(function (g) { g.estudos.forEach(function (e) { if (e.id === id) out = { e: e, g: g }; }); });
+          return out;
+        }
+        function salvar(x, status, nota, quieto) {
+          var a = api(); if (!a || !a.estudoValSave || !x) return;
+          var r = seqDaPlaca().filter(function (s) { return s.id === x.e.id; })[0];
+          a.estudoValSave({ id: x.e.id, status: status, nota: nota, placa: x.g.board, titulo: x.e.title,
+                            medidos: medidos(r), total: r ? (r.steps || []).length : x.e.passos, quem: QUEM })
+            .then(function (j) { if (j && j.rec) { VAL[x.e.id] = j.rec; if (!quieto) desenhar(); } }).catch(function () {});
+        }
+        // estudo de outra placa: abre a placa do Acervo e começa o estudo quando ela carregar
+        function abrirPlaca(g, idEstudo) {
+          if (!g.acervo_id || !window.__2rAcervo) return;
+          try { localStorage.setItem('r2est-pend', JSON.stringify({ id: idEstudo || '', board: g.board, arquivo: g.arquivo || '', t: Date.now() })); } catch (e) {}
+          window.__2rAcervo.open(g.acervo_id).catch(function () {});
+          // Roger 21/10/2026 (vídeo): «ele sai da aba estudos e vai para acervos… quero que fique dentro do estudo» —
+          // a lista continua aberta (por cima da coluna) com o aviso; quando a placa carrega, o ponto a ponto começa sozinho
+          if (PAN) {
+            var li = PAN.querySelector('.lista');
+            if (li) li.innerHTML = '<div class="vazio" style="padding:28px 8px;text-align:center;line-height:1.6"><b style="color:#D4B26A">Abrindo a placa ' + esc(g.board) +
+              '…</b><br>O boardview e o esquemático abrem sozinhos e o ponto a ponto começa em seguida, aqui mesmo em Estudos.</div>';
+          }
+        }
+        function pendente() {
+          var p = null; try { p = JSON.parse(localStorage.getItem('r2est-pend') || 'null'); } catch (e) {}
+          if (!p) return;
+          if (Date.now() - p.t > 240000) { try { localStorage.removeItem('r2est-pend'); } catch (e) {} return; }   // placa grande baixando: até 4 min
+          var pb = String(p.board || '').toUpperCase();
+          if (placa() !== pb || !p.id) { if (placa() === pb) localStorage.removeItem('r2est-pend'); return; }
+          if (seqDaPlaca().some(function (r) { return r.id === p.id; })) { localStorage.removeItem('r2est-pend'); testar(p.id); }
+        }
+        var ROT = { validado: 'Validado', erro: 'Com erro', testando: 'Em teste', '': 'Não testado' };
+        function quando(v) { return v.quando ? (ROT[v.status || ''] || '') + ' em ' + v.quando.split(' ')[0].split('-').reverse().join('/') + ' ' + (v.quando.split(' ')[1] || '') + (v.quem ? ' · ' + v.quem : '') : ''; }
+        function grupos() {
+          var pl = placa(), q = BUSCA.toLowerCase().split(/\s+/).filter(Boolean);
+          var gs = (TODOS || []).map(function (g) {
+            var es = g.estudos.filter(function (e) {
+              if (e.em_mescla && e.em_mescla_placa === g.board && g.estudos.some(function (m) { return m.id === e.em_mescla; })) return false;   // está dentro do card junto (26/10/2026)
+              var txt = ((g.modelo || '') + ' ' + g.board + ' ' + (g.folder || '') + ' ' + e.title + ' ' + (e.modelo || '') + ' ' +
+                         (e.fontes || []).map(function (f) { return f.nome + ' ' + f.titulo; }).join(' ')).toLowerCase();
+              return q.every(function (w) { return txt.indexOf(w) >= 0; });
+            });
+            return { g: g, es: es };
+          }).filter(function (x) { return x.es.length; });
+          gs.sort(function (a, b) { var ma = a.g.modelo || 'ZZZZ', mb = b.g.modelo || 'ZZZZ'; return (b.g.board === pl) - (a.g.board === pl) || (ma < mb ? -1 : ma > mb ? 1 : 0) || (a.g.board < b.g.board ? -1 : 1); });
+          return gs;
+        }
+        function desenhar() {
+          if (!PAN) return;
+          var pl = placa(), gs = grupos(), total = (TODOS || []).reduce(function (n, g) { return n + g.estudos.length; }, 0);
+          var lista = PAN.querySelector('.lista'), cont = PAN.querySelector('.cont');
+          cont.textContent = TODOS ? total + ' estudos em ' + TODOS.length + ' placas' : '';
+          if (!TODOS) { lista.innerHTML = '<div class="vazio">Carregando os estudos…</div>'; return; }
+          if (!gs.length) { lista.innerHTML = '<div class="vazio">' + (BUSCA ? 'Nenhum estudo com esse termo.' : 'Nenhum estudo adicionado ainda.') + '</div>'; return; }
+          var h = '';
+          gs.forEach(function (x, gi) {
+            var g = x.g, aberta = g.board === pl;
+            var ext = (g.arquivo || '').split('.').pop().toUpperCase();
+            if (g.modelo && (gi === 0 || gs[gi - 1].g.modelo !== g.modelo || gs[gi - 1].g.board === pl) && !aberta) h += '<div class="r2est-mod">' + esc(g.modelo) + '</div>';
+            h += '<div class="grupo' + (aberta ? ' aberta' : '') + '" data-g="' + gi + '">' +
+              '<button class="r2acv-card" title="' + (aberta ? 'Placa aberta' : (g.acervo_id ? 'Abrir esta placa' : 'Esta placa não está no Acervo')) + '">' +
+              '<span class="r2acv-card-board">' + esc(g.modelo ? g.modelo + ' · ' + g.board : g.board) + '</span>' +
+              '<span class="r2acv-card-model">' + esc(g.folder || 'fora do Acervo') + '</span>' +
+              '<span class="r2acv-chips">' + (aberta ? '<span class="r2acv-chip ouro">ABERTA</span>' : '') +
+              '<span class="r2acv-chip">' + x.es.length + (x.es.length === 1 ? ' ESTUDO' : ' ESTUDOS') + '</span>' +
+              '</span></button>';
+            // Roger 21/10/2026: «um card dentro de cada modelo de placa, com o ponto a ponto — simples e objetivo»
+            var ehPP = function (e) { return e.seq || /sequ[eê]ncia de start|degraus|energia do t2/i.test(e.title || ''); };
+            var pps = x.es.filter(ehPP), outros = x.es.filter(function (e) { return !ehPP(e); });
+            if (!pps.length) h += '<div class="est vazio"><div class="pp-tag" style="color:var(--text-secondary,#8a8d93)">PONTO A PONTO</div><div class="c">Sequência de start em preparação</div></div>';
+            pps.concat(outros).forEach(function (e, ix) {
+              var v = VAL[e.id] || {}, st = v.status || '';
+              var pp = ix < pps.length;
+              if (ix === pps.length && outros.length && pps.length) h += '<div class="sep-casos">Casos e estudos</div>';
+              var r = aberta ? seqDaPlaca().filter(function (s) { return s.id === e.id; })[0] : null;
+              h += '<div class="est' + (pp ? ' pp' : '') + '" data-id="' + esc(e.id) + '">' + (pp ? '<div class="pp-tag">PONTO A PONTO</div>' : '') + '<div class="t">' + esc(tema(e.title)) + '</div>' + (e.resumo ? '<div class="res">' + esc(e.resumo) + '</div>' : '') + (function () { var o = (e.placas || []).filter(function (p) { return p !== g.board; }); return o.length ? '<div class="res" style="color:#6fae7d">Serve também para ' + esc(o.join(', ')) + '</div>' : ''; })() +
+                ((e.fontes || []).length ? '<div class="fts">' + e.fontes.map(function (f) { return '<button class="fch" style="--c:' + esc(f.cor) + '" data-k="' + esc(f.k) + '" title="Ver só ' + esc(f.nome) + ' (' + esc(f.titulo) + ')"><i style="background:' + esc(f.cor) + '"></i>' + esc(f.nome) + ' <small>' + f.passos + '</small></button>'; }).join('') + '</div>' : '') +
+                (e.credit ? '<details class="cred"><summary>Créditos</summary><div class="c">' + esc(e.credit) + '</div></details>' : '') +
+                '<div class="lin"><span class="chip ' + st + '">' + ROT[st] + '</span><span class="c">' + e.passos + ' passos' + ((e.fontes || []).length ? ' · ' + e.fontes.length + ' fontes' : '') +
+                (r ? ' · ' + medidos(r) + ' medidos' : '') + '</span></div>';
+              // Roger 21/10/2026: «padronizar os cards» — todos com Ver o estudo (esquerda) e Abrir ponto a ponto (direita)
+              h += '<div class="lin acoes"><button class="b ver" title="Ler o estudo inteiro antes">Ver o estudo</button><span style="flex:1"></span>' +
+                   (e.passos > 0 ? '<button class="b pri ler">Abrir ponto a ponto ▶</button>' : '') + '</div><div class="q ppmsg"></div>';
+              if (v.quando) h += '<div class="q">' + esc(quando(v)) + '</div>';
+              h += '</div>';
+            });
+            h += '</div>';
+          });
+          lista.innerHTML = h;
+          lista.querySelectorAll('.grupo').forEach(function (div) {
+            var g = gs[+div.dataset.g].g;
+            div.querySelector('.r2acv-card').style.cursor = 'default';   // o cabeçalho só mostra o modelo e a placa; os estudos estão logo abaixo
+            div.querySelectorAll('.est').forEach(function (c) {
+              c.style.cursor = 'pointer';
+              c.querySelectorAll('.fch').forEach(function (fb) {   // chip da fonte: abre o junto já filtrado nela
+                fb.onclick = function (ev) { ev.stopPropagation(); selPor(c.dataset.id, [fb.dataset.k]); leitor(c.dataset.id); };
+              });
+              c.onclick = function (ev) {
+                if (ev.target.closest('details')) return;
+                // Roger 21/10/2026: «o abrir ponto a ponto… vai direto ao assunto» — card do ponto a ponto já abre a placa e começa
+                if (c.classList.contains('pp') || ev.target.closest('.ler')) {
+                  var xp = achar(c.dataset.id); if (!xp) return;
+                  if (xp.g.board !== placa() && !xp.g.acervo_id) { var q0 = c.querySelector('.ppmsg'); if (q0) q0.textContent = 'A placa ' + xp.g.board + ' não está no Acervo: abra o boardview dela pelo computador e clique de novo.'; return; }
+                  irPontoAPonto(xp); return;
+                }
+                leitor(c.dataset.id);
+              };
+              var vb = c.querySelector('.ver'); if (vb) vb.onclick = function (ev) { ev.stopPropagation(); leitor(c.dataset.id); };
+              var x = achar(c.dataset.id), ta = c.querySelector('textarea');
+              var go = c.querySelector('.go'), ok = c.querySelector('.ok'), er = c.querySelector('.er'), ab = c.querySelector('.abre');
+              if (go) go.onclick = function () { testar(x.e.id); fechar(); };
+              if (ok) ok.onclick = function () { salvar(x, 'validado', ta.value); };
+              if (er) er.onclick = function () { if (!ta.value.trim()) { ta.focus(); ta.placeholder = 'Escreva o que está errado e clique de novo em Com erro'; return; } salvar(x, 'erro', ta.value); };
+              if (ta) ta.onchange = function () { var v = VAL[x.e.id] || {}; salvar(x, v.status || 'testando', ta.value, true); };
+              if (ab) ab.onclick = function () { abrirPlaca(g, x.e.id); };
+            });
+          });
+        }
+        // 20/10/2026 (Roger: «quando entrar em estudos, abrir a janela expandida como no bdv, ocupando o mesmo espaço»):
+        // a lista de estudos ocupa a coluna da esquerda, no mesmo lugar e tamanho do Acervo 2R.
+        function coluna() {
+          var sb = document.querySelector('.sidebar');
+          if (!sb) return null;
+          var r = sb.getBoundingClientRect();
+          return (r.width > 120 && r.height > 120) ? r : null;
+        }
+        function r2estGrip(pan) {      // alça na borda direita: arrasta a largura (24/10/2026)
+          var g = document.createElement('div'); g.className = 'r2est-grip'; g.title = 'Arraste para ajustar a largura';
+          pan.appendChild(g);
+          g.addEventListener('pointerdown', function (e) {
+            e.preventDefault(); g.setPointerCapture(e.pointerId); g.classList.add('on');
+            var x0 = e.clientX, sb = document.querySelector('.sidebar'), sh = sb && sb.querySelector('.sidebar-resize-handle');
+            var w0 = pan.getBoundingClientRect().width;
+            // na coluna: repassa o arraste para a alça da própria coluna (o BoardRipper guarda a largura)
+            if (sh && coluna()) { try { sh.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: e.clientX, clientY: e.clientY, pointerId: e.pointerId, button: 0 })); } catch (e2) {} }
+            function mv(ev) {
+              if (sh && coluna()) { try { sh.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: ev.clientX, clientY: ev.clientY, pointerId: ev.pointerId })); } catch (e3) {} }
+              else { var w = Math.max(280, Math.min(900, Math.round(w0 + ev.clientX - x0))); pan.style.width = w + 'px'; try { localStorage.setItem('r2est-w', String(w)); } catch (e4) {} }
+              posicionar();
+            }
+            function up(ev) {
+              g.removeEventListener('pointermove', mv); g.removeEventListener('pointerup', up); g.classList.remove('on');
+              if (sh && coluna()) { try { sh.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: ev.clientX, clientY: ev.clientY, pointerId: ev.pointerId })); } catch (e5) {} }
+              posicionar();
+            }
+            g.addEventListener('pointermove', mv); g.addEventListener('pointerup', up);
+          });
+        }
+        function posicionar(btn) {
+          var r = coluna();
+          if (r) {
+            PAN.classList.add('doca');
+            PAN.style.left = Math.round(r.left) + 'px'; PAN.style.top = Math.round(r.top) + 'px';
+            PAN.style.width = Math.round(r.width) + 'px'; PAN.style.height = Math.round(r.height) + 'px';
+            // letra maior/menor (zoom da página): o painel fica escalado — corrige para caber na coluna (21/10/2026)
+            var k = PAN.offsetHeight ? PAN.getBoundingClientRect().height / PAN.offsetHeight : 1;
+            if (k > 1.01 || k < 0.99) {
+              PAN.style.left = Math.round(r.left / k) + 'px'; PAN.style.top = Math.round(r.top / k) + 'px';
+              PAN.style.width = Math.round(r.width / k) + 'px'; PAN.style.height = Math.round(r.height / k) + 'px';
+            }
+            return;
+          }
+          var rail = document.querySelector('.activity-rail'), rr = rail ? rail.getBoundingClientRect() : null;
+          if (rr && rr.height > 120) {          // sem a coluna: encosta na barra de ícones, altura toda (21/10/2026)
+            PAN.classList.add('doca');
+            var kk = PAN.offsetHeight ? PAN.getBoundingClientRect().height / PAN.offsetHeight : 1; if (!(kk > 0.2)) kk = 1;
+            PAN.style.left = Math.round(rr.right / kk) + 'px'; PAN.style.top = Math.round(rr.top / kk) + 'px';
+            PAN.style.width = (function () { var w = 380; try { w = parseInt(localStorage.getItem('r2est-w'), 10) || 380; } catch (e) {} return Math.max(280, Math.min(900, w)); })() + 'px'; PAN.style.height = Math.round(rr.height / kk) + 'px';
+            return;
+          }
+          PAN.classList.remove('doca'); PAN.style.width = ''; PAN.style.height = '';
+          var b = btn.getBoundingClientRect();
+          PAN.style.left = Math.round(b.right + 8) + 'px';
+          PAN.style.top = Math.max(8, Math.min(Math.round(b.top), window.innerHeight - 220)) + 'px';
+        }
+        // 26/10/2026 (Roger: «quando estou em Estudos e quero ir para o Acervo 2R, continua aparecendo o card dos
+        // estudos… não pode misturar»): clicar em outro ícone da barra fecha o painel Estudos
+        document.addEventListener('click', function (ev) {
+          var it = ev.target && ev.target.closest && ev.target.closest('.activity-rail-item');
+          if (it && it.id !== '2r-est-btn' && PAN) fechar();
+        }, true);
+        function fechar() {
+          if (!leiSolto()) leiFechar();      // estudo em janela separada: continua aberto (26/10/2026)
+          if (PAN) { PAN.remove(); PAN = null; }
+          var b = document.getElementById('2r-est-btn'); if (b) { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); }
+        }
+        function carregar() {
+          var a = api(); if (!a) return;
+          if (a.estudosTodos) a.estudosTodos().then(function (j) { TODOS = juntarSeq((j && j.rows) || []); desenhar(); }).catch(function () { TODOS = juntarSeq([]); desenhar(); });
+          else { TODOS = []; }
+          if (a.estudoVal) a.estudoVal().then(function (j) { VAL = (j && j.rows) || {}; desenhar(); }).catch(function () {});
+          if (a.who && !QUEM) a.who().then(function (j) { QUEM = (j && j.name) || ''; }).catch(function () {});
+        }
+        // ── Leitor do estudo (Roger, 21/10/2026): «clicar em estudos e saber qual é o estudo que eu quero fazer… depois
+        // abro… abrir o estudo completo na tela onde é o BDV, com prints, todos os textos e depois vai para o ponto a
+        // ponto, automaticamente já abre o bdv e o esquemático correspondente… simples e objetivo».
+        var LEI = null, LEI_URLS = [];
+        // 26/10/2026 (Roger: «separar os estudos do Ripper, são totalmente independentes, pois posso consultar os dois
+        // ao mesmo tempo… alternar entre o estudo e o Ripper»): «Ver o estudo» abre numa JANELA SEPARADA (padrão).
+        // Fechar o painel Estudos ou começar o ponto a ponto não fecha a janela; clicar no número de um passo nela
+        // leva o ponto a ponto para aquele passo. O botão «Dentro do Ripper» volta ao jeito antigo (lembra a escolha).
+        var LEIW = null;
+        function leiSep() { try { return localStorage.getItem('r2lei-janela') !== '0'; } catch (e) { return true; } }
+        function leiSolto() { return !!LEI && LEI.ownerDocument !== document; }
+        function leiDoc() { return (LEI && LEI.ownerDocument) || document; }
+        function leiJanela(titulo) {
+          try {
+            if (LEIW && !LEIW.closed && LEIW.document && LEIW.document.body) { LEIW.document.title = titulo; return LEIW; }
+            var w = window.open('', 'r2estudo', 'width=1040,height=860');
+            if (!w || !w.document) return null;
+            var dd = w.document;
+            dd.open(); dd.write('<!doctype html><html><head><meta charset="utf-8"><title></title></head><body style="margin:0;background:#141518"></body></html>'); dd.close();
+            dd.title = titulo;
+            var css = document.getElementById('r2lei-css'); if (css) dd.head.appendChild(dd.importNode(css, true));
+            var rs = getComputedStyle(document.documentElement);
+            var vars = ['--bg-primary', '--bg-secondary', '--bg-tertiary', '--border', '--text-primary', '--text-secondary'].map(function (k) { var v = rs.getPropertyValue(k); return v && v.trim() ? k + ':' + v.trim() : ''; }).filter(Boolean).join(';');
+            var st = dd.createElement('style');
+            st.textContent = ':root{' + vars + '}html,body{height:100%}#r2lei{left:0!important;top:0!important;right:0!important;bottom:0!important;width:auto!important;height:auto!important;border-left:0!important}' +
+              '#r2lei .ps .num{cursor:pointer}#r2lei .ps .num:hover{outline:1px solid #D4B26A;border-radius:4px}';
+            dd.head.appendChild(st);
+            dd.addEventListener('keydown', function (e) {
+              if (e.key !== 'Escape') return;
+              var z = dd.getElementById('r2lei-zoom'); if (z) { z.remove(); e.stopPropagation(); return; }
+              leiFechar(true);
+            }, true);
+            w.addEventListener('beforeunload', function () { if (LEI && LEI.ownerDocument === dd) LEI = null; LEIW = null; });
+            LEIW = w; return w;
+          } catch (e) { return null; }
+        }
+        var NOTA = { explica: ['Explica', '#5b8def'], atencao: ['Atenção', '#E8A13A'], esperado: ['Esperado', '#6fae7d'], resolvido: ['Resolvido', '#4aa3df'] };
+        function leiCss() {
+          if (document.getElementById('r2lei-css')) return;
+          var st = document.createElement('style'); st.id = 'r2lei-css';
+          st.textContent =
+            '#r2lei{position:fixed;z-index:9001;display:flex;flex-direction:column;background:var(--bg-primary,#141518);color:var(--text-primary,#e8e8e8);font:13.5px/1.55 Inter,-apple-system,"Segoe UI",sans-serif;border-left:1px solid var(--border,#3a3b40)}' +
+            '#r2lei .cab{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--border,#3a3b40);background:var(--bg-secondary,#18191c);flex:0 0 auto}' +
+            '#r2lei .cab .tt{flex:1;min-width:0}#r2lei .cab h2{margin:0;font-size:17px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '#r2lei .cab .sub{color:var(--text-secondary,#9a9a9a);font-size:12px}#r2lei .cab .sub b{color:#D4B26A}' +
+            '#r2lei button.b{border:1px solid var(--border,#4a4b52);background:var(--bg-tertiary,#2a2b30);color:inherit;border-radius:7px;padding:7px 12px;font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap}' +
+            '#r2lei button.b:hover{border-color:#D4B26A;color:#D4B26A}' +
+            '#r2lei button.vai{background:rgba(212,178,106,.16);border-color:#D4B26A;color:#D4B26A;font-weight:800;padding:8px 16px}#r2lei button.vai:hover{background:rgba(212,178,106,.26);color:#D4B26A}' +
+            '#r2lei .corpo{flex:1 1 0;min-height:0;overflow:auto;padding:18px 22px 40px}' +
+            '#r2lei .col{max-width:none;margin:0;display:flex;flex-direction:column;gap:16px}' +   /* sem limite de largura (Roger, 22/10/2026) */
+            '#r2lei .info{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--text-secondary,#aaa);font-size:12.5px}' +
+            '#r2lei .chip{font-size:11px;border-radius:10px;padding:1px 9px;border:1px solid var(--border,#4a4b52);color:var(--text-secondary,#bbb)}' +
+            '#r2lei .chip.validado{border-color:#D4B26A;color:#D4B26A}#r2lei .chip.erro{border-color:#e05a4a;color:#e05a4a}#r2lei .chip.testando{border-color:#E0A040;color:#E0A040}' +
+            '#r2lei h4{margin:0 0 8px;font-size:12px;letter-spacing:.08em;color:#D4B26A;text-transform:uppercase}' +
+            '#r2lei .caixa{border:1px solid var(--border,#34353a);border-radius:10px;background:var(--bg-secondary,#18191c);padding:12px 14px}' +
+            '#r2lei .prints{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}' +
+            '#r2lei .prints figure{margin:0;border:1px solid var(--border,#34353a);border-radius:8px;overflow:hidden;background:#0d0e10;cursor:zoom-in}' +
+            '#r2lei .prints img{display:block;width:100%;height:130px;object-fit:cover}' +
+            '#r2lei .prints figcaption{font-size:11px;color:var(--text-secondary,#999);padding:4px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '#r2lei .grp{border:1px solid var(--border,#34353a);border-radius:10px;overflow:hidden}' +
+            '#r2lei .grp > .gt{padding:9px 14px;background:var(--bg-tertiary,#222327);font-weight:800;display:flex;gap:8px;align-items:baseline}' +
+            '#r2lei .grp > .gt .n{color:#D4B26A}' +
+            '#r2lei .ps{padding:10px 14px;border-top:1px solid var(--border,#2c2d32);display:flex;flex-direction:column;gap:5px}' +
+            '#r2lei .ps .l1{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}#r2lei .ps .num{color:var(--text-secondary,#888);min-width:22px;font-size:12px}' +
+            '#r2lei .ps .tit{font-weight:700}#r2lei .net{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:rgba(212,178,106,.12);color:#D4B26A;border-radius:5px;padding:0 6px}' +
+            '#r2lei .ps .pts{color:var(--text-secondary,#b5b5b5);font-size:12.5px;padding-left:30px}#r2lei .ps .pts b{color:var(--text-primary,#e8e8e8)}' +
+            '#r2lei .nota{margin-left:30px;border-left:3px solid;padding:2px 10px;font-size:12.8px}#r2lei .nota .tp{font-weight:800;font-size:11px;letter-spacing:.05em;text-transform:uppercase;margin-right:6px}' +
+            '#r2lei .fonte{padding-left:30px;color:var(--text-secondary,#888);font-size:11.5px;font-style:italic}' +
+            '#r2lei textarea{width:100%;box-sizing:border-box;min-height:54px;background:var(--bg-primary,#141518);color:inherit;border:1px solid var(--border,#3a3b40);border-radius:7px;padding:8px;font:inherit;font-size:12.5px;resize:vertical}' +
+            '#r2lei .val .lin{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}' +
+            '#r2lei button.ok.on{background:rgba(212,178,106,.16);border-color:#D4B26A;color:#D4B26A}#r2lei button.er.on{background:#c0392b;color:#fff;border-color:#c0392b}' +
+            '#r2lei .aviso{color:#E8A13A;font-size:12px}' +
+            '#r2lei .ps.falta{background:rgba(224,90,74,.08);box-shadow:inset 3px 0 0 #e05a4a}#r2lei .ps.falta .net{background:rgba(224,90,74,.15);color:#ef7b6f}' +
+            '#r2lei .flt{padding-left:30px;color:#ef7b6f;font-weight:700;font-size:12.5px}' +
+            '#r2lei .ps.corr{background:rgba(111,174,125,.07);box-shadow:inset 3px 0 0 #6fae7d}#r2lei .crr{padding-left:30px;color:#8fc49c;font-size:12.5px}#r2lei .crr b{color:#cfe8d5}' +
+            '#r2lei .ps .lin{display:flex;gap:8px;flex-wrap:wrap;padding-left:30px;margin-top:4px;align-items:center}' +
+            '#r2lei .ed{display:flex;flex-direction:column;gap:6px;margin:6px 0 2px 30px;padding:10px;border:1px solid var(--border,#3a3b40);border-radius:8px;background:var(--bg-secondary,#18191c)}' +
+            '#r2lei .ed .lin{padding-left:0}#r2lei .ed input{flex:1 1 140px;min-width:0;background:var(--bg-primary,#141518);color:inherit;border:1px solid var(--border,#3a3b40);border-radius:6px;padding:6px 8px;font:inherit;font-size:12.5px}' +
+            '#r2lei .ed input:focus{outline:none;border-color:#D4B26A}#r2lei .emsg{color:#E8A13A;font-size:12px}' +
+            '#r2lei .fsel{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 18px;border-bottom:1px solid var(--border,#3a3b40);background:var(--bg-secondary,#18191c);flex:0 0 auto}' +
+            '#r2lei .fsel .rt{color:var(--text-secondary,#999);font-size:12px;margin-right:4px}#r2lei .fsel button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border,#4a4b52);background:transparent;color:var(--text-secondary,#aaa);border-radius:14px;padding:3px 11px 3px 8px;font:inherit;font-size:12px;cursor:pointer}' +
+            '#r2lei .fsel button i{width:9px;height:9px;border-radius:50%;display:inline-block;opacity:.45}#r2lei .fsel button.on{color:var(--text-primary,#eee);border-color:var(--c,#D4B26A);background:rgba(255,255,255,.05)}#r2lei .fsel button.on i{opacity:1}' +
+            '#r2lei .fsel button.tod{padding-left:11px}#r2lei .fsel button.tod.on{border-color:#D4B26A;color:#D4B26A}#r2lei .fsel small{color:var(--text-secondary,#888)}' +
+            '#r2lei .fds{display:inline-flex;gap:3px;align-items:center;margin-left:2px}#r2lei .fds i{width:9px;height:9px;border-radius:50%;display:inline-block}#r2lei .fds em{font-style:normal;font-size:11px;color:var(--text-secondary,#999);margin-left:4px}' +
+            '#r2lei .fn{font-weight:700;font-size:11px;margin-right:6px;white-space:nowrap}#r2lei .fn i{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:1px}' +
+            '#r2lei .vals{margin-left:30px;display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;border-left:3px solid #6fae7d;padding:2px 10px;font-size:12.8px}#r2lei .vals .tp{font-weight:800;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:#6fae7d;margin-right:2px}' +
+            '#r2lei .vals .v{border:1px solid var(--c);border-radius:7px;padding:1px 8px}#r2lei .ps .pts .fds i{width:7px;height:7px}' +
+            '#r2lei-zoom{position:fixed;inset:0;z-index:9003;background:rgba(0,0,0,.86);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;cursor:zoom-out}' +
+            '#r2lei-zoom img{max-width:94vw;max-height:86vh;object-fit:contain;border-radius:6px}#r2lei-zoom .cap{color:#ddd;font:13px Inter,sans-serif}';
+          document.head.appendChild(st);
+        }
+        function leiPos() {
+          if (!LEI || leiSolto()) return;
+          var rail = document.querySelector('.activity-rail'), rr = rail ? rail.getBoundingClientRect() : null;
+          var left = PAN ? PAN.getBoundingClientRect().right : (rr ? rr.right : 0);
+          var top = rr ? rr.top : 40, bot = rr ? rr.bottom : window.innerHeight;
+          var k = LEI.offsetHeight ? LEI.getBoundingClientRect().height / LEI.offsetHeight : 1;
+          if (!(k > 0.2)) k = 1;
+          LEI.style.left = Math.round(left / k) + 'px'; LEI.style.top = Math.round(top / k) + 'px';
+          // 22/10/2026 (Roger: «ainda continua cortando a tela interna dos estudos» no Windows): a largura vinha de
+          // window.innerWidth, que no Windows (escala/zoom) não está na mesma medida das outras contas e sobrava uma
+          // faixa à direita e embaixo. Agora o leitor ENCOSTA na borda direita e embaixo, na medida da própria tela.
+          var docB = document.documentElement.getBoundingClientRect().bottom || bot;
+          LEI.style.width = 'auto'; LEI.style.right = '0px';
+          LEI.style.height = 'auto'; LEI.style.bottom = Math.max(0, Math.round((docB - bot) / k)) + 'px';
+        }
+        function leiFechar(janela) {
+          var dd = leiDoc();
+          var z = dd.getElementById('r2lei-zoom'); if (z) z.remove();
+          if (LEI) { LEI.remove(); LEI = null; }
+          LEI_URLS.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (e) {} }); LEI_URLS = [];
+          if (janela && LEIW && !LEIW.closed) { try { LEIW.close(); } catch (e) {} LEIW = null; }
+        }
+        // fontes escolhidas no estudo junto (26/10/2026) — lembra a última escolha de cada um
+        var SEL = (function () { try { return JSON.parse(localStorage.getItem('r2est-sel') || '{}') || {}; } catch (e) { return {}; } })();
+        function selPor(id, ks) { if (ks && ks.length) SEL[id] = ks; else delete SEL[id]; try { localStorage.setItem('r2est-sel', JSON.stringify(SEL)); } catch (e) {} }
+        function selDe(x, d) {
+          var todas = ((d && d.fontes) || x.e.fontes || []).map(function (f) { return f.k; });
+          var s = (SEL[x.e.id] || []).filter(function (k) { return todas.indexOf(k) >= 0; });
+          return s.length ? s : todas;
+        }
+        function leiFontes(x, d, imgs) {
+          var fs = (d && d.fontes) || [], bar = LEI && LEI.querySelector('.fsel');
+          if (!bar) return;
+          if (!fs.length) { bar.style.display = 'none'; return; }
+          var sel = selDe(x, d), todas = sel.length === fs.length;
+          bar.style.display = '';
+          bar.innerHTML = '<span class="rt">Fontes:</span><button class="tod' + (todas ? ' on' : '') + '" title="Mostrar todas as fontes juntas">Todas</button>' +
+            fs.map(function (f) { return '<button class="' + (sel.indexOf(f.k) >= 0 ? 'on' : '') + '" data-k="' + esc(f.k) + '" style="--c:' + esc(f.cor) + '" title="' + esc(f.titulo) + ' — clique para ligar ou desligar"><i style="background:' + esc(f.cor) + '"></i>' + esc(f.nome) + ' <small>' + f.passos + '</small></button>'; }).join('');
+          bar.querySelector('.tod').onclick = function () { selPor(x.e.id, null); leiDesenhar(x, d, imgs); };
+          bar.querySelectorAll('button[data-k]').forEach(function (b) {
+            b.onclick = function () {
+              var k = b.dataset.k, s = selDe(x, d).slice(), i = s.indexOf(k);
+              if (s.length === fs.length) s = [k];                    // de «Todas» para uma fonte só
+              else if (i >= 0) s.splice(i, 1); else s.push(k);
+              selPor(x.e.id, s.length && s.length < fs.length ? s : null);
+              leiDesenhar(x, d, imgs);
+            };
+          });
+        }
+        function leiDoRoteiro(e) {           // sequência de start (sem ficha JSON): monta pelos passos do roteiro
+          var seq = window.__r2seq, r = ((seq && seq.list) || []).filter(function (x) { return x.id === e.id; })[0];
+          if (!r) return null;
+          return { titulo: r.title, placa: r.board, modelo: e.modelo, creditos: [],
+                   passos: (r.steps || []).map(function (s) { return { n: s.n, titulo: s.name || '', nets: s.nets || [], pontos: [], notas: s.note ? [{ tipo: 'explica', texto: s.note }] : [] }; }) };
+        }
+        function leitor(id) {
+          var x = achar(id); if (!x) return;
+          leiCss(); leiFechar();
+          LEI = document.createElement('div'); LEI.id = 'r2lei';
+          LEI.innerHTML = '<div class="cab"><div class="tt"><h2>' + esc(tema(x.e.title)) + '</h2><div class="sub"><b>' + esc(x.g.modelo || '') + '</b> · ' + esc(x.g.board) +
+            (x.g.folder ? ' · ' + esc(x.g.folder) : '') + (function () { var o = (x.e.placas || []).filter(function (p) { return p !== x.g.board; }); return o.length ? ' · <span style="color:#6fae7d">serve também para ' + esc(o.join(', ')) + '</span>' : ''; })() + '</div></div>' +
+            '<button class="b vai">' + (x.g.board === placa() ? 'Testar na placa ▶' : 'Abrir a placa e testar ▶') + '</button><button class="b fec" title="Fechar o estudo (Esc)">Fechar</button></div>' +
+            '<div class="fsel" style="display:none"></div><div class="corpo"><div class="col"><div class="caixa">Carregando o estudo…</div></div></div>';
+          var JW = leiSep() ? leiJanela(tema(x.e.title) + ' — ' + (x.g.modelo ? x.g.modelo + ' · ' : '') + x.g.board) : null;
+          if (JW) { JW.document.body.appendChild(LEI); try { JW.focus(); } catch (e) {} }
+          else { document.body.appendChild(LEI); leiPos(); setTimeout(leiPos, 60); }
+          var bSep = document.createElement('button'); bSep.className = 'b sep';
+          bSep.textContent = JW ? 'Dentro do Ripper' : 'Janela separada';
+          bSep.title = JW ? 'Mostrar o estudo por cima da placa, como antes' : 'Abrir o estudo numa janela própria (dá para ver o estudo e a placa ao mesmo tempo)';
+          bSep.onclick = function () { try { localStorage.setItem('r2lei-janela', JW ? '0' : '1'); } catch (e) {} leiFechar(!!JW); leitor(id); };
+          LEI.querySelector('.cab').insertBefore(bSep, LEI.querySelector('.fec'));
+          LEI.querySelector('.fec').onclick = function () { leiFechar(true); };
+          LEI.querySelector('.vai').onclick = function () { irPontoAPonto(x); };
+          var a = api();
+          var pronto = function (d, imgs) { if (LEI) leiDesenhar(x, d, imgs || []); };
+          if (x.e.seq) { pronto(leiDoRoteiro(x.e), []); return; }
+          if (!a || !a.estudo) { pronto(null, []); return; }
+          var CORR = {};
+          var pega = a.estudoCorr ? a.estudoCorr(id).then(function (c) { ((c && c.items) || []).forEach(function (it) { CORR[it.n] = it; }); }).catch(function () {}) : Promise.resolve();
+          Promise.all([a.estudo(id), pega]).then(function (r) { var j = r[0]; x.corr = CORR; pronto(j && j.estudo, j && j.imagens); }).catch(function () { pronto(null, []); });
+        }
+        function netsDaPlacaAberta(x) {
+          if (!x || x.g.board !== placa()) return null;
+          try { var U = window.__2rBoardGet && window.__2rBoardGet(), b = U && U.activeTab && U.activeTab.board; return b && b.nets ? b.nets : null; } catch (e) { return null; }
+        }
+        function falta(p, x) {
+          if (p.info) return false;               // passo de informação (análise, dicas, firmware): sem linha para medir
+          if (!(p.nets || []).length) return true;
+          if ((p.notas || []).some(function (n) { return n.tipo === 'atencao' && /não encontrad|nao encontrad|não conferid/i.test(n.texto || ''); })) return true;
+          var nets = netsDaPlacaAberta(x);
+          if (nets && nets.get) return (p.nets || []).every(function (n) { return !nets.get(n); });
+          return false;
+        }
+        function editorCorr(ps, x, d, imgs, n) {
+          if (ps.querySelector('.ed')) return;
+          var nets = netsDaPlacaAberta(x), lista = [];
+          if (nets && nets.forEach) nets.forEach(function (v, k) { if (k) lista.push(k); });
+          var ed = document.createElement('div'); ed.className = 'ed';
+          ed.innerHTML = (nets ? '' : '<div class="aviso">Abra a placa ' + esc(x.g.board) + ' para escolher a linha certa (a lista de nets e o pino selecionado vêm dela).</div>') +
+            '<div class="lin"><input class="enet" list="r2lei-nets" placeholder="Net certa (ex.: PP3V3_G3H)"><button class="b epin">Usar o pino selecionado na placa</button></div>' +
+            '<datalist id="r2lei-nets">' + lista.sort().slice(0, 5000).map(function (k) { return '<option value="' + esc(k) + '">'; }).join('') + '</datalist>' +
+            '<div class="lin"><input class="epeca" placeholder="Peça onde medir (ex.: C7130)" style="max-width:180px"><input class="epino" placeholder="Pino (opcional)" style="max-width:120px"><input class="eobs" placeholder="Observação (o que viu, valor medido)"></div>' +
+            '<div class="lin"><button class="b vai esalva">Salvar correção</button><button class="b ecanc">Cancelar</button><span class="emsg"></span></div>';
+          ps.appendChild(ed);
+          var q = function (c) { return ed.querySelector(c); };
+          q('.enet').focus();
+          q('.ecanc').onclick = function () { ed.remove(); };
+          q('.epin').onclick = function () {
+            try {
+              var U = window.__2rBoardGet && window.__2rBoardGet(), t = U && U.activeTab, b = t && t.board, sel = t && t.selection;
+              if (!b || !sel || sel.partIndex == null || sel.pinIndex == null || sel.pinIndex < 0) { q('.emsg').textContent = 'Clique num pino na placa primeiro.'; return; }
+              var pt = b.parts[sel.partIndex], pin = pt.pins[sel.pinIndex];
+              q('.enet').value = pin.net || ''; q('.epeca').value = pt.name; q('.epino').value = pin.number || pin.name || '';
+              q('.emsg').textContent = '';
+            } catch (e) { q('.emsg').textContent = 'Não consegui ler o pino selecionado.'; }
+          };
+          q('.esalva').onclick = function () {
+            var net = q('.enet').value.trim(), peca = q('.epeca').value.trim();
+            if (!net && !peca) { q('.emsg').textContent = 'Informe a net ou a peça.'; return; }
+            if (net && nets && nets.get && !nets.get(net)) { q('.emsg').textContent = 'A net «' + net + '» não existe nesta placa.'; return; }
+            var a = api(); if (!a || !a.estudoCorrSalvar) return;
+            q('.esalva').disabled = true; q('.emsg').textContent = 'Enviando para o grupo…';
+            a.estudoCorrSalvar({ id: x.e.id, n: +n, net: net, pontos: peca ? [{ peca: peca, pino: q('.epino').value.trim(), obs: '' }] : [], obs: q('.eobs').value.trim(), placa: x.g.board })
+              .then(function (r) {
+                if (!r || !r.ok) { q('.esalva').disabled = false; q('.emsg').textContent = (r && r.error) || 'Não consegui enviar.'; return; }
+                x.corr = x.corr || {}; x.corr[+n] = r.item || { n: +n, net: net, pontos: peca ? [{ peca: peca }] : [], name: QUEM || 'você', time: '' };
+                if (LEI) leiDesenhar(x, d, imgs);
+              }).catch(function () { q('.esalva').disabled = false; q('.emsg').textContent = 'Não consegui enviar.'; });
+          };
+        }
+        function irPontoAPonto(x) {
+          if (x && x.e && x.e.mescla) {         // estudo junto com uma fonte só escolhida: segue o estudo dela (26/10/2026)
+            var s1 = selDe(x, null);
+            if (s1.length === 1) { var f1 = (x.e.fontes || []).filter(function (f) { return f.k === s1[0]; })[0], x1 = f1 && achar(f1.id); if (x1) x = x1; }
+          }
+          var pl = placa();
+          var solto = leiSolto();
+          if (x.g.board === pl) { if (!solto) leiFechar(); testar(x.e.id); fechar(); if (solto) try { window.focus(); } catch (e) {} return; }
+          if (x.g.acervo_id) { if (!solto) leiFechar(); abrirPlaca(x.g, x.e.id); if (solto) try { window.focus(); } catch (e) {} return; }
+          var av = LEI && LEI.querySelector('.aviso-ir');
+          if (av) av.textContent = 'A placa ' + x.g.board + ' não está no Acervo: abra o boardview dela pelo computador e clique de novo.';
+        }
+        function leiDesenhar(x, d, imgs) {
+          var col = LEI.querySelector('.col'), v = VAL[x.e.id] || {}, st = v.status || '';
+          if (!d) { col.innerHTML = '<div class="caixa">Não consegui abrir o conteúdo deste estudo. Você ainda pode ir direto para o ponto a ponto.</div>'; return; }
+          var MS = !!d.mescla, FS = {}, SL = MS ? selDe(x, d) : [];
+          (d.fontes || []).forEach(function (f) { FS[f.k] = f; });
+          if (MS) leiFontes(x, d, imgs); else { var fb0 = LEI.querySelector('.fsel'); if (fb0) fb0.style.display = 'none'; }
+          var tem = function (ks) { return !MS || (ks || []).some(function (k) { return SL.indexOf(k) >= 0; }); };
+          var rotF = function (k) { var f = FS[k]; return f ? '<span class="fn" style="color:' + esc(f.cor) + '"><i style="background:' + esc(f.cor) + '"></i>' + esc(f.nome) + '</span>' : ''; };
+          var dots = function (ks) { return '<span class="fds">' + (ks || []).filter(function (k) { return SL.indexOf(k) >= 0 && FS[k]; }).map(function (k) { return '<i style="background:' + esc(FS[k].cor) + '" title="' + esc(FS[k].nome) + '"></i>'; }).join('') + '</span>'; };
+          var ps = (d.passos || []).filter(function (p) { return tem(p.fontes); });
+          if (MS) imgs = imgs.filter(function (im) { return !im.f || SL.indexOf(im.f) >= 0; });
+          var h = '<div class="info"><span class="chip ' + st + '">' + (ROT[st] || 'Não testado') + '</span><span>' + ps.length + ' passos</span>' +
+            (MS ? '<span>· ' + ps.filter(function (p) { return (p.fontes || []).filter(function (k) { return SL.indexOf(k) >= 0; }).length > 1; }).length + ' em mais de uma fonte</span>' : '') +
+            (imgs.length ? '<span>· ' + imgs.length + (imgs.length === 1 ? ' print' : ' prints') + '</span>' : '') +
+            (v.quando ? '<span>· ' + esc(quando(v)) + '</span>' : '') + '<span class="aviso aviso-ir"></span></div>';
+          var ap = d.aplica_a || {};
+          if (ap.nota || (d.creditos || []).length) {
+            h += '<div class="caixa">' + (ap.nota ? '<div>' + esc(ap.nota) + '</div>' : '') +
+              ((d.creditos || []).length ? '<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--text-secondary,#999)">Créditos</summary>' +
+                d.creditos.map(function (c) { return '<div style="font-size:12px;color:var(--text-secondary,#aaa)">' + esc(c.quem || '') + (c.obs ? ' — ' + esc(c.obs) : '') + '</div>'; }).join('') + '</details>' : '') + '</div>';
+          }
+          if (imgs.length) {
+            h += '<div><h4>Prints</h4><div class="prints">' + imgs.map(function (im, i) {
+              return '<figure data-i="' + i + '"><img alt="" data-k="' + esc(im.k) + '"><figcaption title="' + esc(im.nome) + '">' + esc(im.nome) + '</figcaption></figure>';
+            }).join('') + '</div></div>';
+          }
+          h += '<div><h4>Passo a passo</h4><div style="display:flex;flex-direction:column;gap:12px">';
+          var grupos = [], porId = {};
+          ps.forEach(function (p) { var gid = p.gid || ('s' + p.n); if (!porId[gid]) { porId[gid] = { t: '', ps: [] }; grupos.push(porId[gid]); } porId[gid].ps.push(p); });
+          var tit = function (p) { if (!MS || !p.titulos) return p.titulo || ''; var k = (p.fontes || []).filter(function (k) { return SL.indexOf(k) >= 0; })[0]; return (k && p.titulos[k]) || p.titulo || ''; };
+          grupos.forEach(function (gr, gi) {
+            var t = tit(gr.ps[0]);
+            h += '<div class="grp"><div class="gt"><span class="n">' + (gi + 1) + '.</span><span>' + esc(t) + '</span></div>';
+            gr.ps.forEach(function (p) {
+              var cr = (x.corr || {})[p.n], fl = !cr && falta(p, x);
+              var pt = tit(p), nf = MS ? (p.fontes || []).filter(function (k) { return SL.indexOf(k) >= 0; }).length : 0;
+              h += '<div class="ps' + (fl ? ' falta' : '') + (cr ? ' corr' : '') + '" data-n="' + esc(p.n) + '"><div class="l1"><span class="num">' + esc(p.n) + '</span>' + (gr.ps.length > 1 && pt && pt !== t ? '<span class="tit">' + esc(pt) + '</span>' : '') +
+                (p.nets || []).map(function (n) { return '<span class="net">' + esc(n) + '</span>'; }).join(' ') +
+                (MS ? dots(p.fontes).replace('</span>', (nf > 1 ? '<em>' + nf + ' fontes</em>' : '') + '</span>') : '') + '</div>';
+              var pts = (p.pontos || []).filter(function (o) { return tem(o.fs); });
+              if (pts.length) h += '<div class="pts">Medir em: ' + pts.map(function (o) {
+                var ex = '';
+                if (MS && o.esperado_por) ex = Object.keys(o.esperado_por).filter(function (k) { return SL.indexOf(k) >= 0; }).map(function (k) { return ' / ' + (FS[k] ? FS[k].nome + ': ' : '') + esc(o.esperado_por[k]); }).join('');
+                return '<b>' + esc(o.peca || '') + (o.pino ? ' pino ' + esc(o.pino) : '') + '</b>' + (o.esperado ? ' (' + esc(o.esperado) + ex + ')' : '') + (o.obs ? ' — ' + esc(o.obs) : '') + (MS && nf > 1 ? ' ' + dots(o.fs) : '');
+              }).join('; ') + '</div>';
+              var nts = (p.notas || []).filter(function (nt) { return !MS || !nt.f || SL.indexOf(nt.f) >= 0; });
+              var esp = MS ? nts.filter(function (nt) { return nt.tipo === 'esperado'; }) : [];
+              if (esp.length > 1) {                  // valores de fontes diferentes lado a lado, cada um na cor da fonte
+                h += '<div class="vals"><span class="tp">Esperado</span>' + esp.map(function (nt) { var f = FS[nt.f] || {}; return '<span class="v" style="--c:' + esc(f.cor || '#888') + '">' + rotF(nt.f) + esc(nt.texto || '') + '</span>'; }).join('') + '</div>';
+                nts = nts.filter(function (nt) { return nt.tipo !== 'esperado'; });
+              }
+              nts.forEach(function (nt) { var tp = NOTA[nt.tipo] || ['', '#888']; h += '<div class="nota" style="border-color:' + tp[1] + '">' + (tp[0] ? '<span class="tp" style="color:' + tp[1] + '">' + tp[0] + '</span>' : '') + (MS && nt.f && nf > 1 ? rotF(nt.f) : '') + esc(nt.texto || '') + '</div>'; });
+              if (MS) (p.fonte_lista || []).filter(function (fl2) { return SL.indexOf(fl2.f) >= 0; }).forEach(function (fl2) { h += '<div class="fonte">' + rotF(fl2.f) + esc(fl2.t) + '</div>'; });
+              else if (p.fonte) h += '<div class="fonte">' + esc(p.fonte) + '</div>';
+              if (cr) h += '<div class="crr">Corrigido por <b>' + esc(cr.name || cr.email || 'grupo') + '</b> em ' + esc(String(cr.time || '').slice(0, 16)) + ': ' +
+                (cr.net ? '<span class="net">' + esc(cr.net) + '</span> ' : '') + (cr.pontos || []).map(function (o) { return '<b>' + esc(o.peca) + (o.pino ? ' pino ' + esc(o.pino) : '') + '</b>' + (o.obs ? ' (' + esc(o.obs) + ')' : ''); }).join('; ') +
+                (cr.obs ? ' — ' + esc(cr.obs) : '') + '</div>';
+              if (fl) h += '<div class="flt">Linha não encontrada nesta placa.</div>';
+              if ((fl || cr) && !x.e.seq && !MS) h += '<div class="lin"><button class="b corrigir">' + (cr ? 'Corrigir de novo' : 'Corrigir') + '</button></div>';
+              h += '</div>';
+            });
+            h += '</div>';
+          });
+          h += '</div></div>';
+          h += '<div class="caixa val"><h4>Depois de testar</h4><textarea placeholder="Observação (o que conferiu, o que está errado, em qual passo)">' + esc(v.nota || '') + '</textarea>' +
+            '<div class="lin"><button class="b ok' + (st === 'validado' ? ' on' : '') + '">Validado</button><button class="b er' + (st === 'erro' ? ' on' : '') + '">Com erro</button>' +
+            '<span style="flex:1"></span><button class="b vai vai2">' + (x.g.board === placa() ? 'Testar na placa ▶' : 'Abrir a placa e testar ▶') + '</button></div></div>';
+          col.innerHTML = h;
+          var ta = col.querySelector('.val textarea');
+          col.querySelector('.val .ok').onclick = function () { salvar(x, 'validado', ta.value); setTimeout(function () { if (LEI) leiDesenhar(x, d, imgs); }, 500); };
+          col.querySelector('.val .er').onclick = function () { if (!ta.value.trim()) { ta.focus(); ta.placeholder = 'Escreva o que está errado e clique de novo em Com erro'; return; } salvar(x, 'erro', ta.value); setTimeout(function () { if (LEI) leiDesenhar(x, d, imgs); }, 500); };
+          ta.onchange = function () { var vv = VAL[x.e.id] || {}; salvar(x, vv.status || 'testando', ta.value, true); };
+          col.querySelector('.vai2').onclick = function () { irPontoAPonto(x); };
+          col.querySelectorAll('.ps .corrigir').forEach(function (bt) {
+            bt.onclick = function () { var ps = bt.closest('.ps'); editorCorr(ps, x, d, imgs, ps.dataset.n); };
+          });
+          var a = api();
+          col.querySelectorAll('.prints figure').forEach(function (fg) {
+            var img = fg.querySelector('img'), k = img.dataset.k;
+            if (a && a.estudoImg) a.estudoImg(k).then(function (blob) { var u = URL.createObjectURL(blob); LEI_URLS.push(u); img.src = u; }).catch(function () {});
+            fg.onclick = function () {
+              if (!img.src) return;
+              var dd = leiDoc(), z = dd.createElement('div'); z.id = 'r2lei-zoom';
+              z.innerHTML = '<img src="' + img.src + '"><div class="cap">' + esc(imgs[+fg.dataset.i].nome) + '</div>';
+              z.onclick = function () { z.remove(); };
+              dd.body.appendChild(z);
+            };
+          });
+          // número do passo: leva o ponto a ponto (se este estudo estiver rodando) para aquele passo — 26/10/2026
+          col.querySelectorAll('.ps .num').forEach(function (nb) {
+            nb.title = 'Ir para este passo no ponto a ponto';
+            nb.onclick = function () {
+              var seq = window.__r2seq, n = nb.closest('.ps').dataset.n;
+              if (!seq || !seq.active || seq.active.id !== x.e.id) { irPontoAPonto(x); return; }
+              var i = (seq.active.steps || []).findIndex(function (s) { return String(s.n) === String(n); });
+              if (i >= 0) { if (!seq.on) seq.start(); seq.go(i); }
+              if (leiSolto()) try { window.focus(); } catch (e) {}
+            };
+          });
+        }
+        document.addEventListener('keydown', function (e) {
+          if (e.key !== 'Escape') return;
+          if (leiSolto()) return;              // Esc no Ripper não fecha o estudo da janela separada
+          var z = document.getElementById('r2lei-zoom'); if (z) { z.remove(); e.stopPropagation(); return; }
+          if (LEI) { leiFechar(); e.stopPropagation(); }
+        }, true);
+        window.addEventListener('resize', function () { leiPos(); });
+        setInterval(function () { if (LEI) leiPos(); }, 500);
+        window.__r2EstAbrir = function () { var bb = document.getElementById('2r-est-btn'); if (bb && !PAN) abrir(bb); };
+        function abrir(btn) {
+          if (PAN) {
+            fechar();
+            if (document.body.classList.contains('r2-est-run')) return;   // estudo rodando: fica no ponto a ponto
+            if (coluna()) { var at = document.querySelector('.activity-rail-item.active[data-sidebar-tab]'); if (at) at.click(); }   // Roger 21/10: oculta como os outros ícones
+            return;
+          }
+          // Roger 21/10/2026: «se estou no menu estudo, não é para ir para nuvens» — não abre mais o Acervo 2R;
+          // sem a coluna da esquerda, a lista encosta na barra de ícones
+          btn.classList.add('active'); btn.setAttribute('aria-pressed', 'true');
+          css(); PAN = document.createElement('div'); PAN.id = 'r2est';
+          PAN.innerHTML = '<div class="topo"><h3><span>Estudos<small class="cont"></small></span><button class="x" title="Fechar">×</button></h3>' +
+            '<input class="busca" type="search" placeholder="Buscar: placa, modelo ou assunto (ex.: 820-01700, T2, áudio)"></div><div class="lista"></div>' +
+            '<div class="r2est-sync"><div class="bar"><i></i></div><div class="lin2"><span class="txt">Conferindo a nuvem…</span><button class="b agora" style="display:none">Sincronizar agora</button></div></div>';
+          document.body.appendChild(PAN); r2estGrip(PAN); posicionar(btn); setTimeout(function () { if (PAN) posicionar(btn); }, 260);
+          PAN.querySelector('.x').onclick = fechar;
+          var inp = PAN.querySelector('.busca'); inp.value = BUSCA;
+          inp.oninput = function () { BUSCA = inp.value; desenhar(); };
+          desenhar(); carregar();
+          // rodapé: barra de sincronização + quantidades (computador × nuvem) — 21/10/2026
+          var SY = PAN.querySelector('.r2est-sync');
+          function sync(agora) {
+            var a = api(); if (!a || !a.estudosSync || !PAN) return;
+            a.estudosSync(agora).then(function (j) {
+              if (!PAN || !j || j.error) return;
+              var bar = SY.querySelector('.bar'), i = SY.querySelector('.bar i'), t = SY.querySelector('.txt'), bt = SY.querySelector('.agora');
+              var menu = (TODOS || []).reduce(function (n, g) { return n + g.estudos.length; }, 0);
+              bt.style.display = j.owner ? '' : 'none';
+              if (j.active) {
+                bar.classList.add('on'); i.style.width = Math.round(100 * (j.done || 0) / Math.max(1, j.total || 1)) + '%';
+                t.textContent = 'Sincronizando ' + (j.auto ? 'sozinho' : '') + '… ' + (j.done || 0) + '/' + (j.total || 1);
+              } else {
+                var ok = j.owner ? (j.local === j.nuvem) : true;
+                bar.classList.toggle('on', true); i.style.width = j.owner ? (Math.round(100 * Math.min(j.nuvem, j.local) / Math.max(1, j.local)) + '%') : '100%';
+                bar.classList.toggle('dif', !ok);
+                var p = [];
+                if (j.owner) p.push(j.local + ' no computador');
+                p.push(j.nuvem + ' na nuvem');
+                p.push(menu + ' no menu');
+                t.textContent = p.join(' · ') + (j.last_err ? ' · erro: ' + j.last_err : (j.last_ok ? ' · sincronizado ' + j.last_ok : '')) +
+                  (j.owner && !ok && !j.last_err ? ' · falta sincronizar' : '');
+              }
+            }).catch(function () {});
+          }
+          SY.querySelector('.agora').onclick = function () { sync(true); };
+          sync(false);
+          (function loop() { if (!PAN) return; sync(false); setTimeout(loop, 1500); })();
+        }
+        function mk() {
+          if (document.getElementById('2r-est-btn') || !document.body) return;
+          var b = document.createElement('button'); b.id = '2r-est-btn'; b.type = 'button';
+          b.title = 'Estudos ponto a ponto: todos, separados por placa — testar e validar';
+          b.className = 'activity-rail-item';
+          b.style.display = 'none';   // grupo de estudo / Modo DEV (21/10/2026): só aparece para quem tem acesso
+          b.innerHTML = '<span class="activity-rail-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"/></svg></span><span class="activity-rail-cap">Estudos</span>';
+          b.addEventListener('click', function () { abrir(b); });
+          document.addEventListener('click', function (e) {   // outra aba da coluna (Acervo, Medições, Ponto a ponto…) fecha os Estudos
+            var t = e.target && e.target.closest && e.target.closest('.activity-rail-item[data-sidebar-tab]');
+            if (t && Date.now() - (window.__r2EstProg || 0) > 1500 && t.getAttribute('data-sidebar-tab') !== 'guide-x') { document.body.classList.remove('r2-est-run'); }
+            var pend = null; try { pend = JSON.parse(localStorage.getItem('r2est-pend') || 'null'); } catch (e2) {}
+            if (t && PAN && pend && Date.now() - pend.t < 240000 && t.getAttribute('data-sidebar-tab') === 'acervo') return;   // abrindo a placa: não sai de Estudos
+            if (t && PAN) fechar();
+          }, true);
+          function place() {
+            var obd = document.getElementById('2r-obd-btn');
+            var ref = obd && obd.parentNode ? obd : null;
+            if (!ref) {
+              var rail = document.querySelector('.activity-rail'); if (!rail) return;
+              var items = rail.querySelectorAll('.activity-rail-item[data-sidebar-tab]');
+              ref = items.length ? items[items.length - 1] : null; if (!ref) return;
+            }
+            if (b.previousElementSibling !== ref || b.parentNode !== ref.parentNode) ref.parentNode.insertBefore(b, ref.nextSibling);
+            if (PAN) posicionar(b);
+            var emEst = !!PAN || document.body.classList.contains('r2-est-run');
+            b.classList.toggle('active', emEst); b.setAttribute('aria-pressed', emEst ? 'true' : 'false');
+          }
+          place(); setInterval(place, 1000); window.addEventListener('resize', place);
+          // acesso aos estudos: estudos na pasta privada OU licença no grupo de estudo (Modo DEV). Quem sai do
+          // grupo (Roger desmarca no Admin) deixa de ver na próxima conferência com o servidor.
+          function conferir() {
+            var a = api();
+            if (!a || !a.estudosOk) return;
+            a.estudosOk().then(function (j) {
+              var ok = !!(j && j.ok);
+              b.style.display = ok ? '' : 'none';
+              if (!ok && PAN) fechar();
+            }).catch(function () {});
+          }
+          conferir(); setTimeout(conferir, 3000); setInterval(conferir, 60000);
+          var last = '';
+          setInterval(function () { var f = arquivo(); if (f !== last) { last = f; if (PAN && !PAN.contains(document.activeElement)) desenhar(); } pendente(); }, 800);
+          try { if (window.__r2seq && window.__r2seq.subscribe) window.__r2seq.subscribe(function () { if (PAN && !PAN.contains(document.activeElement)) desenhar(); }); } catch (e) {}
+        }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mk); else mk();
+      })();
+    </script>
+      <!-- 2R (Roger, 21/10/2026): barra da esquerda em ordem alfabética, alinhada, selecionado em dourado; cards online do Acervo 2R em verde suave -->
+    <style id="r2-extra-211026">
+      /* número da posição do passo no card do ponto a ponto (Roger, 21/10/2026) */
+      /* card do passo a passo sempre do MESMO tamanho: as setas não mudam de lugar (Roger, 21/10/2026) */
+      .r2gd-hud { width:520px !important; max-width:calc(100% - 32px) !important; min-width:0 !important; height:104px !important; box-sizing:border-box; }
+      .r2gd-hud-arrow { flex:0 0 52px; width:52px; padding:0 !important; display:flex; align-items:center; justify-content:center; }
+      .r2gd-hud-pos { flex:0 0 64px; }
+      .r2gd-hud-body { flex:1 1 auto; min-width:0; overflow:hidden; display:flex; flex-direction:column; justify-content:center; }
+      .r2gd-hud-body > * { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .r2gd-hud-net { font-size:18px !important; }
+      .r2gd-hud-sub .r2pi-wrap { display:inline; }
+/* 27/10/2026: AÇÃO do passo (o que fazer: remover, jumper, medir) — card branco em negrito, primeiro no card */
+.r2pi-acao { background:#F2F2F2 !important; border-left-color:#5f666d !important; font-weight:700 !important; color:#111 !important; }
+.r2pi-acao:before { content:"AÇÃO  "; font-weight:800; font-size:9.5px; letter-spacing:.3px; color:#5f666d; }
+      .r2gd-hud-body > .r2gd-hud-sub { white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; line-height:1.45; }
+      .r2gd-hud-pos { display:flex; flex-direction:column; align-items:center; justify-content:center; min-width:58px; padding:6px 10px; border-right:1px solid var(--r2-line-strong,#3a3b40); }
+      .r2gd-hud-pos b { font-size:26px; line-height:1; font-weight:800; color:#D4B26A; font-variant-numeric:tabular-nums; }
+      .r2gd-hud-pos span { font-size:11px; color:var(--text-secondary,#9aa0a6); margin-top:3px; white-space:nowrap; }
+      .activity-rail-item.active, .activity-rail-item[aria-pressed="true"], .activity-rail-item:focus-visible { color:#D4B26A !important; }
+      .activity-rail-item.active .activity-rail-ico, .activity-rail-item.active .activity-rail-cap,
+      .activity-rail-item[aria-pressed="true"] .activity-rail-ico, .activity-rail-item[aria-pressed="true"] .activity-rail-cap { color:#D4B26A !important; }
+      [data-testid="rail-autohide-toggle"] { display:none !important; }   /* Roger 21/10: sem o auto hide */
+      .r2acv-cards .r2acv-card { background:rgba(96,165,110,.10); border-color:rgba(96,165,110,.38); }
+      .r2acv-cards .r2acv-card:hover { background:rgba(96,165,110,.18); border-color:rgba(96,165,110,.60); }
+      .r2acv-cards .r2acv-card .r2acv-card-board { color:#6fae7d; }
+      .activity-rail-item[data-sidebar-tab="library"] { display:none !important; }
+      .activity-rail-item.r2-acv-on, .activity-rail-item.r2-acv-on .activity-rail-ico, .activity-rail-item.r2-acv-on .activity-rail-cap { color:#D4B26A !important; }
+      .r2-acvseg { display:flex; gap:0; margin:8px 10px 2px; border:1px solid rgba(212,178,106,.45); border-radius:8px; overflow:hidden; flex:0 0 auto; }
+      .r2-acvseg button { flex:1 1 0; background:transparent; border:0; color:var(--text-secondary,#9aa0a6); font:inherit; font-size:12.5px; font-weight:600; padding:6px 8px; cursor:pointer; }
+      .r2-acvseg button + button { border-left:1px solid rgba(212,178,106,.45); }
+      .r2-acvseg button.on { background:rgba(212,178,106,.18); color:#D4B26A; }
+      .r2-seg button.on { background:rgba(212,178,106,.14) !important; color:#D4B26A !important; }
+      .r2-acvseg button:hover:not(.on) { background:rgba(255,255,255,.05); }
+    </style>
+    <script>
+      (function () {
+        'use strict';
+        function nome(el) { var c = el.querySelector('.activity-rail-cap'); return ((c && c.textContent) || el.getAttribute('title') || '').trim().toLowerCase(); }
+        function ordenar() {
+          var rail = document.querySelector('.activity-rail'); if (!rail) return;
+          var first = rail.querySelector('.activity-rail-item'); if (!first) return;
+          var box = first.parentNode, its = Array.prototype.filter.call(box.children, function (x) { return x.classList && x.classList.contains('activity-rail-item'); });
+          its.slice().sort(function (a, b) { return nome(a).localeCompare(nome(b), 'pt'); })
+            .forEach(function (el, i) { if (el.style.order !== String(i)) el.style.order = String(i); });
+          var cs = getComputedStyle(box); if (cs.display.indexOf('flex') < 0) { box.style.display = 'flex'; box.style.flexDirection = 'column'; }
+        }
+        window.__2rGoTab = function (id) { var el = document.querySelector('.activity-rail-item[data-sidebar-tab="' + id + '"]'); if (el) el.click(); };
+        function acvLocal() {   // em "Local" (dentro do Acervo) o ícone Acervo 2R continua dourado
+          var lib = document.querySelector('.activity-rail-item[data-sidebar-tab="library"]');
+          var acv = document.querySelector('.activity-rail-item[data-sidebar-tab="acervo"]');
+          if (acv) acv.classList.toggle('r2-acv-on', !!(lib && lib.classList.contains('active')));
+        }
+        // Roger 21/10/2026 (14h40): «ordenar os ícones, estão fora da ordem alfabética» — só os de cima, em ordem A–Z;
+        // o resto (fixar, ocultar painel…) fica onde estava
+        function ordenarTopo() {
+          var rail = document.querySelector('.activity-rail'); if (!rail) return;
+          var tab = rail.querySelector('.activity-rail-item[data-sidebar-tab]'); if (!tab) return;
+          var box = tab.parentNode, filhos = Array.prototype.slice.call(box.children);
+          var topo = filhos.filter(function (x) { return x.classList && x.classList.contains('activity-rail-item') &&
+                       !x.classList.contains('activity-rail-foot') && !x.classList.contains('activity-rail-status') &&
+                       getComputedStyle(x).display !== 'none'; });
+          topo.slice().sort(function (a, b) { return nome(a).localeCompare(nome(b), 'pt'); })
+            .forEach(function (el, i) { if (el.style.order !== String(i)) el.style.order = String(i); });
+          filhos.forEach(function (el, i) { if (topo.indexOf(el) < 0 && el.style.order !== String(1000 + i)) el.style.order = String(1000 + i); });
+        }
+        setInterval(function () { ordenarTopo(); acvLocal(); }, 1500);   // 26/10/2026: menos voltas (Windows lento)
+      })();
+    </script>
+    <!-- 2R (Roger, 21/10/2026): Ponto a ponto vira FICHA DE ANÁLISE. «a pessoa abre uma ficha, coloca os detalhes da análise,
+         modelo, sintomas, suspeitas, o que vai medir… primeiro mapeia o que vai medir, depois grava a primeira vez… pode regravar
+         cada ponto: aparece um card perguntando se deseja atualizar a medição ou manter a antiga… nova leitura dentro da mesma
+         ficha, leitura 1, leitura 2 por diante, com marca de tempo… um comparativo do antes e depois do reparo».
+         As sequências de start foram para o painel Estudos; quando um estudo roda, o executor aparece aqui por cima da ficha. -->
+    <style id="r2ficha-css">
+      .r2pp-col .r2ficha-host { flex:1 1 0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+      .r2pp-col .r2seq-host { display:none; flex:1 1 0; min-height:0; flex-direction:column; }
+      body.r2-seqrun .r2pp-col .r2ficha-host { display:none; }
+      body.r2-seqrun .r2pp-col .r2seq-host { display:flex; }
+      body.r2-est-run .activity-rail-item[data-sidebar-tab="guide"].active { color:var(--text-secondary,#9aa0a6) !important; }
+      body.r2-est-run .activity-rail-item[data-sidebar-tab="guide"].active .activity-rail-ico,
+      body.r2-est-run .activity-rail-item[data-sidebar-tab="guide"].active .activity-rail-cap { color:var(--text-secondary,#9aa0a6) !important; }
+      body.r2-est-run .activity-rail-item[data-sidebar-tab="guide"].active:before { display:none; }
+      body.r2-est-run [id="2r-est-btn"], body.r2-est-run [id="2r-est-btn"] .activity-rail-ico, body.r2-est-run [id="2r-est-btn"] .activity-rail-cap { color:#D4B26A !important; }
+      .r2seq-volta b { font-weight:700; }
+      .r2-fim { margin:8px 10px; padding:12px; border:1px solid #D4B26A; border-radius:10px; background:rgba(212,178,106,.10); display:flex; flex-direction:column; gap:6px; }
+      .r2-fim .t { font-weight:800; color:#D4B26A; }
+      .r2-fim .s { font-size:12px; color:var(--text-secondary,#9aa0a6); }
+      .r2-fim .b3 { display:flex; gap:6px; flex-wrap:wrap; }
+      .r2-fim button { border:1px solid var(--border,#4a4b52); background:var(--bg-tertiary,#2a2b30); color:inherit; border-radius:7px; padding:6px 10px; font:inherit; font-size:12px; cursor:pointer; }
+      .r2-fim button:hover { border-color:#D4B26A; color:#D4B26A; }
+      .r2-fim button.rf-re { background:rgba(212,178,106,.16); border-color:#D4B26A; color:#D4B26A; font-weight:700; }
+      .r2seq-volta button { white-space:nowrap; flex:0 0 auto; }
+      .r2seq-volta { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--border,#34353a); font-size:12px; color:var(--text-secondary,#9aa0a6); }
+      .r2fx { --ouro:#D4B26A; --ln:var(--border,#34353a); --sub:var(--text-secondary,#9aa0a6); --cx:var(--bg-primary,#1d1e22); --cx2:var(--bg-tertiary,#2a2b30);
+              display:flex; flex-direction:column; flex:1 1 0; min-height:0; font-size:12.5px; }
+      .r2fx .topo { display:flex; align-items:center; gap:6px; padding:10px 10px 8px; border-bottom:1px solid var(--ln); }
+      .r2fx .topo h3 { margin:0; font-size:14px; font-weight:700; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .r2fx .topo h3 small { color:var(--sub); font-weight:500; font-size:11.5px; }
+      .r2fx .corpo { flex:1 1 0; min-height:0; overflow:auto; padding:8px 10px 14px; display:flex; flex-direction:column; gap:10px; }
+      .r2fx .pe { flex:0 0 auto; border-top:1px solid var(--ln); padding:6px 10px; display:flex; gap:6px; align-items:center; color:var(--sub); font-size:11.5px; }
+      .r2fx .pe .esp { flex:1; }
+      .r2fx button.b { border:1px solid var(--ln); background:var(--cx2); color:inherit; border-radius:6px; padding:4px 9px; font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
+      .r2fx button.b:hover { border-color:var(--ouro); color:var(--ouro); }
+      .r2fx button.b.pri { background:rgba(212,178,106,.16); border-color:var(--ouro); color:var(--ouro); font-weight:700; }
+      .r2fx button.b.pri:hover { background:rgba(212,178,106,.26); color:var(--ouro); }
+      .r2fx button.b.mini { padding:2px 7px; font-size:11px; }
+      .r2fx button.b.perigo:hover { border-color:#e05a4a; color:#e05a4a; }
+      .r2fx input, .r2fx textarea, .r2fx select { background:var(--bg-secondary,#141518); color:inherit; border:1px solid var(--ln); border-radius:6px; padding:5px 7px; font:inherit; font-size:12.5px; box-sizing:border-box; min-width:0; }
+      .r2fx input:focus, .r2fx textarea:focus, .r2fx select:focus { outline:none; border-color:var(--ouro); }
+      .r2fx textarea { width:100%; resize:vertical; min-height:38px; }
+      .r2fx label.f { display:flex; flex-direction:column; gap:3px; color:var(--sub); font-size:11px; letter-spacing:.02em; }
+      .r2fx label.f > input, .r2fx label.f > textarea { color:var(--text-primary,#e8e8e8); }
+      .r2fx .g2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+      .r2fx details.sec { border:1px solid var(--ln); border-radius:8px; background:var(--cx); }
+      .r2fx details.sec > summary { cursor:pointer; padding:8px 10px; font-weight:700; font-size:12.5px; list-style:none; display:flex; align-items:center; gap:6px; }
+      .r2fx details.sec > summary::-webkit-details-marker { display:none; }
+      .r2fx details.sec > summary::before { content:'▸'; color:var(--ouro); font-size:11px; }
+      .r2fx details.sec[open] > summary::before { content:'▾'; }
+      .r2fx details.sec > summary .res { margin-left:auto; color:var(--sub); font-weight:500; font-size:11px; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .r2fx details.sec > .in { padding:0 10px 10px; display:flex; flex-direction:column; gap:8px; }
+      .r2fx .etapas { display:flex; border:1px solid rgba(212,178,106,.45); border-radius:8px; overflow:hidden; }
+      .r2fx .etapas button { flex:1 1 0; background:transparent; border:0; color:var(--sub); font:inherit; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; padding:7px 4px; cursor:pointer; }
+      .r2fx .etapas button + button { border-left:1px solid rgba(212,178,106,.45); }
+      .r2fx .etapas button.on { background:rgba(212,178,106,.18); color:var(--ouro); }
+      .r2fx .etapas button .n { display:inline-block; min-width:15px; height:15px; line-height:15px; border-radius:8px; font-size:10px; margin-right:4px; background:rgba(212,178,106,.25); color:var(--ouro); }
+      .r2fx .add { display:flex; gap:6px; flex-wrap:wrap; }
+      .r2fx .add input { flex:1 1 120px; }
+      .r2fx .dica { color:var(--sub); font-size:11.5px; line-height:1.45; }
+      .r2fx .vazio { color:var(--sub); text-align:center; padding:18px 8px; line-height:1.5; }
+      .r2fx .pt { border:1px solid var(--ln); border-radius:8px; background:var(--cx); padding:7px 8px; display:flex; flex-direction:column; gap:6px; }
+      .r2fx .pt.cur { border-color:var(--ouro); box-shadow:0 0 0 1px rgba(212,178,106,.35) inset; }
+      .r2fx .pt .l1 { display:flex; align-items:center; gap:6px; }
+      .r2fx .pt .num { color:var(--sub); font-size:11px; min-width:16px; }
+      .r2fx .pt .alvo { font-weight:700; cursor:pointer; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .r2fx .pt .alvo:hover { color:var(--ouro); text-decoration:underline; }
+      .r2fx .pt .tipo { font-size:10px; color:var(--sub); border:1px solid var(--ln); border-radius:8px; padding:0 6px; }
+      .r2fx .pt .l2 { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+      .r2fx .pt .l2 select { width:auto; }
+      .r2fx .pt .l2 input.esp { flex:1 1 90px; }
+      .r2fx .pt .l2 input.val { flex:1 1 90px; font-weight:700; font-size:13px; }
+      .r2fx .pt .ant { color:var(--sub); font-size:11px; }
+      .r2fx .pt .ant b { color:var(--text-primary,#ddd); font-weight:600; }
+      .r2fx .st { display:flex; gap:4px; }
+      .r2fx .st button { border:1px solid var(--ln); background:transparent; color:var(--sub); border-radius:6px; padding:3px 7px; font:inherit; font-size:11px; cursor:pointer; }
+      .r2fx .st button.ok.on { background:#2f7d4a; border-color:#2f7d4a; color:#fff; }
+      .r2fx .st button.ruim.on { background:#b8443a; border-color:#b8443a; color:#fff; }
+      .r2fx .leit { display:flex; align-items:center; gap:6px; flex-wrap:wrap; border:1px solid rgba(212,178,106,.35); background:rgba(212,178,106,.07); border-radius:8px; padding:7px 8px; }
+      .r2fx .leit .tit { font-weight:700; color:var(--ouro); }
+      .r2fx .leit .hora { color:var(--sub); font-size:11.5px; flex:1; }
+      .r2fx .leit select { width:auto; }
+      .r2fx .tbl { overflow:auto; border:1px solid var(--ln); border-radius:8px; }
+      .r2fx table { border-collapse:collapse; width:100%; font-size:12px; }
+      .r2fx th, .r2fx td { padding:5px 7px; border-bottom:1px solid var(--ln); text-align:left; white-space:nowrap; vertical-align:top; }
+      .r2fx th { position:sticky; top:0; background:var(--cx2); font-size:11px; color:var(--sub); font-weight:600; }
+      .r2fx th .h { display:block; color:var(--ouro); font-size:12px; }
+      .r2fx td.alvo { font-weight:700; cursor:pointer; }
+      .r2fx td.alvo:hover { color:var(--ouro); }
+      .r2fx td.mud { background:rgba(212,178,106,.16); color:var(--ouro); font-weight:700; }
+      .r2fx td.ruim { color:#ef7b6f; }
+      .r2fx td.ok { color:#79c08e; }
+      .r2fx td .r { color:var(--sub); font-size:10.5px; display:block; }
+      .r2fx tr.cons td { color:var(--sub); font-style:italic; }
+      .r2fx .lista .ficha { border:1px solid var(--ln); border-radius:8px; background:var(--cx); padding:8px 10px; cursor:pointer; display:flex; flex-direction:column; gap:3px; }
+      .r2fx .lista .ficha:hover { border-color:var(--ouro); }
+      .r2fx .lista .ficha .t { font-weight:700; color:var(--ouro); }
+      .r2fx .lista .ficha .s { color:var(--sub); font-size:11.5px; }
+      .r2fx .lista { display:flex; flex-direction:column; gap:8px; }
+      .r2fx .chip { font-size:10.5px; border-radius:10px; padding:0 7px; border:1px solid var(--ln); color:var(--sub); }
+      .r2fx .chip.res { border-color:#2f7d4a; color:#79c08e; }
+      .r2fx .chip.nao { border-color:#b8443a; color:#ef7b6f; }
+      .r2fx .res3 { display:flex; gap:6px; flex-wrap:wrap; }
+      .r2fx .res3 button.on { background:rgba(212,178,106,.16); border-color:var(--ouro); color:var(--ouro); }
+      .r2fx .veu { position:absolute; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; padding:16px; z-index:5; }
+      .r2fx .card { background:var(--bg-secondary,#1b1c20); border:1px solid var(--ouro); border-radius:10px; padding:14px; max-width:320px; display:flex; flex-direction:column; gap:10px; box-shadow:0 10px 30px rgba(0,0,0,.45); }
+      .r2fx .card h4 { margin:0; font-size:13.5px; }
+      .r2fx .card .cmp { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; font-size:12.5px; }
+      .r2fx .card .cmp span:nth-child(odd) { color:var(--sub); }
+      .r2fx .card .bt { display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; }
+    </style>
+    <script>
+      (function () {
+        'use strict';
+        var API = function () { return window.__2rMeterApi || null; };
+        var BRD = function () { try { return window.__2rBoardGet ? window.__2rBoardGet() : null; } catch (e) { return null; } };
+        var HOST = null, F = null, LISTA = null, ETAPA = 'mapear', LEIT = 0, CUR = -1, TSAVE = 0, SALVO = '', BANC = null;
+        var MODOS = { V: 'Tensão (V)', D: 'Diodo', R: 'Resistência (Ω)' };
+        var UNI = { V: 'V', D: '', R: 'Ω' };
+        function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+        function agora() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+          return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+        function hora(s) { return String(s || '').split(' ')[1] || ''; }
+        function aba() { var U = BRD(); return U && U.activeTab ? U.activeTab : null; }
+        function placaAberta() { var t = aba(), n = (t && t.fileName) || ''; var m = /(820-\d{4,5})/i.exec(n); return { arq: n, placa: m ? m[1].toUpperCase() : '' }; }
+        function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+
+        // ── gravar ───────────────────────────────────────────────────────────────────────────────────────
+        function salvarJa() {
+          var a = API(); if (!a || !a.fichaSalvar || !F) return;
+          clearTimeout(TSAVE);
+          a.fichaSalvar(F).then(function (j) {
+            if (j && j.ficha) { F.id = j.ficha.id; F.criado = j.ficha.criado; F.por = j.ficha.por; SALVO = 'Salvo às ' + hora(agora()); }
+            else SALVO = 'Não salvou: ' + ((j && j.error) || 'erro');
+            pe();
+          }).catch(function (e) { SALVO = 'Não salvou: ' + (e && e.message ? e.message : e); pe(); });
+        }
+        function salvar() { SALVO = 'Salvando…'; pe(); clearTimeout(TSAVE); TSAVE = setTimeout(salvarJa, 700); }
+        function pe() { var s = HOST && HOST.querySelector('.pe .esp'); if (s) s.textContent = SALVO; }
+
+        // ── placa: ir até o ponto ────────────────────────────────────────────────────────────────────────
+        function achar(alvo) {
+          var t = aba(), b = t && t.board; if (!b) return null;
+          var a = String(alvo || '').trim().toUpperCase();
+          if (a.indexOf('.') > 0) {
+            var pr = a.split('.'), pi = -1;
+            for (var i = 0; i < b.parts.length; i++) if (String(b.parts[i].name).toUpperCase() === pr[0]) { pi = i; break; }
+            if (pi >= 0) { var pins = b.parts[pi].pins; for (var k = 0; k < pins.length; k++) if (String(pins[k].number || pins[k].name).toUpperCase() === pr[1]) return { pi: pi, pin: k }; }
+          }
+          if (b.nets && b.nets.get) {
+            if (b.nets.get(alvo)) return { net: alvo };
+            var achou = null; b.nets.forEach(function (v, k) { if (!achou && String(k).toUpperCase() === a) achou = k; });
+            if (achou) return { net: achou };
+          }
+          return null;
+        }
+        function irPara(alvo) {
+          var U = BRD(), x = achar(alvo); if (!U || !x) return false;
+          try { if (x.net) U.highlightNet(x.net); else U.focusPinKeepZoom(x.pi, x.pin); } catch (e) { return false; }
+          return true;
+        }
+        function pinoSelecionado() {
+          var t = aba(), b = t && t.board, s = t && t.selection;
+          if (!b || !s || s.partIndex == null || s.pinIndex == null || s.pinIndex < 0) return null;
+          var p = b.parts[s.partIndex], pin = p && p.pins[s.pinIndex]; if (!p || !pin) return null;
+          return { alvo: p.name + '.' + (pin.number || pin.name), net: pin.net || '' };
+        }
+        function netsDaPlaca() { var t = aba(), b = t && t.board, out = []; if (b && b.nets && b.nets.forEach) b.nets.forEach(function (v, k) { if (k) out.push(k); }); return out.sort(); }
+
+        // ── ficha ────────────────────────────────────────────────────────────────────────────────────────
+        function nova() {
+          var pa = placaAberta(), bc = BANC || {};
+          F = { id: '', os: bc.os || '', modelo: bc.modelo || '', placa: pa.placa || bc.placa || '', arquivo: pa.arq, sintoma: bc.sintoma || '',
+                suspeitas: '', achado: '', trocado: '', resultado: '', leituras: [], pontos: [] };
+          ETAPA = 'mapear'; LEIT = 0; CUR = -1; SALVO = 'Ficha nova — salva sozinha a cada mudança';
+          lembrar(); desenhar();
+        }
+        function abrirFicha(id) {
+          var a = API(); if (!a || !a.ficha) return;
+          a.ficha(id).then(function (j) {
+            if (!j || !j.ficha) return;
+            F = j.ficha; F.pontos = F.pontos || []; F.leituras = F.leituras || [];
+            ETAPA = F.leituras.length ? 'gravar' : 'mapear'; LEIT = F.leituras.length; CUR = -1; SALVO = 'Aberta';
+            lembrar(); desenhar();
+          }).catch(function () {});
+        }
+        function fecharFicha() { if (F && TSAVE) salvarJa(); F = null; lembrar(); carregarLista(); }
+        function lembrar() { try { localStorage.setItem('r2ficha-aberta', F && F.id ? F.id : ''); } catch (e) {} }
+        function carregarLista() {
+          var a = API(); LISTA = null; desenhar();
+          if (!a || !a.fichas) { LISTA = []; desenhar(); return; }
+          a.fichas().then(function (j) { LISTA = (j && j.rows) || []; desenhar(); }).catch(function () { LISTA = []; desenhar(); });
+        }
+        function leitura(n) { return (F.leituras || [])[n - 1] || null; }
+        function val(p, n) { return (p.vals || {})[String(n)] || null; }
+        function novaLeitura() {
+          var n = F.leituras.length + 1;
+          F.leituras.push({ n: n, em: agora(), consumo: '', nota: '' });
+          LEIT = n; ETAPA = 'gravar'; CUR = F.pontos.length ? 0 : -1;
+          salvar(); desenhar();
+          if (CUR >= 0) { irPara(F.pontos[0].alvo); focarValor(0); }
+        }
+        function addPonto(alvo, tipo) {
+          alvo = String(alvo || '').trim(); if (!alvo) return false;
+          if (F.pontos.some(function (p) { return p.alvo.toUpperCase() === alvo.toUpperCase(); })) { aviso('«' + alvo + '» já está na lista.'); return false; }
+          F.pontos.push({ id: uid(), alvo: alvo, tipo: tipo || (alvo.indexOf('.') > 0 ? 'pino' : 'net'), modo: 'V', esperado: '', vals: {} });
+          salvar(); return true;
+        }
+        function aviso(t) { var d = HOST && HOST.querySelector('.aviso'); if (d) { d.textContent = t; d.style.display = t ? '' : 'none'; } }
+
+        // card: «atualizar a medição ou manter a antiga»
+        function perguntar(p, n, novo, depois) {
+          var v = val(p, n), corpo = HOST.querySelector('.r2fx');
+          var veu = document.createElement('div'); veu.className = 'veu';
+          veu.innerHTML = '<div class="card"><h4>' + esc(p.alvo) + ' já foi medido na Leitura ' + n + '</h4>' +
+            '<div class="cmp"><span>Medição salva</span><b>' + esc(v.x) + ' ' + esc(UNI[p.modo] || '') + ' <small style="color:var(--sub);font-weight:500">às ' + esc(v.em || '') + '</small></b>' +
+            '<span>Nova medição</span><b style="color:var(--ouro)">' + esc(novo) + ' ' + esc(UNI[p.modo] || '') + '</b></div>' +
+            '<div class="dica">A medição antiga fica guardada no histórico do ponto.</div>' +
+            '<div class="bt"><button class="b man">Manter a antiga</button><button class="b pri atu">Atualizar a medição</button></div></div>';
+          corpo.appendChild(veu);
+          veu.querySelector('.atu').focus();
+          veu.querySelector('.atu').onclick = function () { veu.remove(); depois(true); };
+          veu.querySelector('.man').onclick = function () { veu.remove(); depois(false); };
+          veu.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); veu.remove(); depois(false); } });
+        }
+        function gravarValor(i, x, segue) {
+          var p = F.pontos[i]; if (!p) return;
+          x = String(x || '').trim(); p.vals = p.vals || {};
+          var v = p.vals[String(LEIT)];
+          var fim = function () { salvar(); desenhar(); if (segue) proximo(i); };
+          if (!x) { if (v && v.x) desenhar(); return; }
+          if (v && v.x && v.x !== x) {
+            perguntar(p, LEIT, x, function (sim) {
+              if (sim) { (v.hist = v.hist || []).push({ x: v.x, em: v.em }); v.x = x; v.em = agora(); fim(); }
+              else { desenhar(); if (segue) proximo(i); }
+            });
+            return;
+          }
+          if (v && v.x === x) { if (segue) proximo(i); return; }
+          p.vals[String(LEIT)] = { x: x, em: agora(), st: '' };
+          fim();
+        }
+        function proximo(i) {
+          var j = i + 1; if (j >= F.pontos.length) { CUR = -1; desenhar(); aviso('Leitura ' + LEIT + ' completa. Veja o Comparativo.'); return; }
+          CUR = j; desenhar(); irPara(F.pontos[j].alvo); focarValor(j);
+        }
+        function focarValor(i) { setTimeout(function () { var el = HOST && HOST.querySelector('.pt[data-i="' + i + '"] input.val'); if (el) { el.focus(); el.select(); el.scrollIntoView({ block: 'nearest' }); } }, 30); }
+
+        // ── desenho ──────────────────────────────────────────────────────────────────────────────────────
+        function desenhar() {
+          if (!HOST) return;
+          var h = '<div class="r2fx" style="position:relative">';
+          if (!F) h += telaLista(); else h += telaFicha();
+          h += '</div>';
+          HOST.innerHTML = h;
+          ligar();
+        }
+        function telaLista() {
+          var h = '<div class="topo"><h3>Fichas de análise</h3><button class="b pri nova">+ Nova ficha</button></div><div class="corpo">';
+          h += '<div class="dica">Abra uma ficha para cada placa: anote modelo, sintoma e suspeitas, mapeie os pontos que vai medir e grave as leituras (antes, durante e depois do reparo). As sequências de start agora ficam em <b>Estudos</b>.</div>';
+          if (BANC && (BANC.os || BANC.modelo)) h += '<div class="dica">Ficha ativa na bancada: <b>' + esc([BANC.os && 'OS ' + BANC.os, BANC.modelo].filter(Boolean).join(' · ')) + '</b> — a ficha nova já vem com esses dados.</div>';
+          if (LISTA === null) h += '<div class="vazio">Carregando…</div>';
+          else if (!LISTA.length) h += '<div class="vazio">Nenhuma ficha ainda.<br>Clique em <b>+ Nova ficha</b>.</div>';
+          else {
+            var pa = placaAberta().placa;
+            h += '<div class="lista">';
+            LISTA.forEach(function (r) {
+              var t = [r.modelo, r.placa].filter(Boolean).join(' · ') || 'Sem modelo';
+              h += '<div class="ficha" data-id="' + esc(r.id) + '"><div class="t">' + esc(t) + (pa && r.placa === pa ? ' <span class="chip" style="border-color:#D4B26A;color:#D4B26A">PLACA ABERTA</span>' : '') + '</div>' +
+                (r.sintoma ? '<div>' + esc(r.sintoma) + '</div>' : '') +
+                '<div class="s">' + esc([r.os && 'OS ' + r.os, r.leituras + (r.leituras === 1 ? ' leitura' : ' leituras'), r.pontos + ' pontos', fmt(r.atualizado)].filter(Boolean).join(' · ')) +
+                (r.resultado ? ' <span class="chip ' + (r.resultado === 'resolvido' ? 'res' : r.resultado === 'nao' ? 'nao' : '') + '">' + esc(RES[r.resultado] || r.resultado) + '</span>' : '') + '</div></div>';
+            });
+            h += '</div>';
+          }
+          return h + '</div>';
+        }
+        var RES = { resolvido: 'Resolvido', nao: 'Não resolvido', andamento: 'Em andamento' };
+        function fmt(iso) { if (!iso) return ''; var m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(iso); return m ? m[3] + '/' + m[2] + ' ' + m[4] + ':' + m[5] : iso; }
+        function telaFicha() {
+          var tit = [F.modelo, F.placa].filter(Boolean).join(' · ') || 'Ficha nova';
+          var h = '<div class="topo"><button class="b mini volta" title="Todas as fichas">‹ Fichas</button><h3>' + esc(tit) + (F.os ? ' <small>OS ' + esc(F.os) + '</small>' : '') + '</h3></div>';
+          h += '<div class="corpo">';
+          var resumo = [F.sintoma].filter(Boolean).join(' · ');
+          h += '<details class="sec"' + (!F.pontos.length && !F.leituras.length ? ' open' : '') + '><summary>Dados da análise<span class="res">' + esc(resumo || 'modelo, sintoma, suspeitas') + '</span></summary><div class="in">' +
+            '<div class="g2"><label class="f">Modelo<input data-k="modelo" value="' + esc(F.modelo) + '" placeholder="A2338"></label>' +
+            '<label class="f">Placa<input data-k="placa" value="' + esc(F.placa) + '" placeholder="820-02020"></label></div>' +
+            '<div class="g2"><label class="f">Nº da OS (opcional)<input data-k="os" value="' + esc(F.os) + '"></label>' +
+            '<label class="f">Consumo na fonte (chegada)<input data-k="consumo" value="' + esc(F.consumo || '') + '" placeholder="5 V 0,05 A"></label></div>' +
+            '<label class="f">Sintoma<textarea data-k="sintoma" placeholder="O que o cliente relatou e o que você viu">' + esc(F.sintoma) + '</textarea></label>' +
+            '<label class="f">Suspeitas<textarea data-k="suspeitas" placeholder="Linhas e componentes suspeitos">' + esc(F.suspeitas) + '</textarea></label>' +
+            '</div></details>';
+          h += '<div class="etapas">' +
+            '<button data-e="mapear" class="' + (ETAPA === 'mapear' ? 'on' : '') + '"><span class="n">1</span>Mapear</button>' +
+            '<button data-e="gravar" class="' + (ETAPA === 'gravar' ? 'on' : '') + '"><span class="n">2</span>Gravar</button>' +
+            '<button data-e="comp" class="' + (ETAPA === 'comp' ? 'on' : '') + '"><span class="n">3</span>Comparativo</button></div>';
+          h += '<div class="aviso dica" style="display:none;color:var(--ouro)"></div>';
+          if (ETAPA === 'mapear') h += telaMapear();
+          else if (ETAPA === 'gravar') h += telaGravar();
+          else h += telaComp();
+          h += '</div><div class="pe"><span class="esp">' + esc(SALVO) + '</span><button class="b mini perigo apaga" title="Move a ficha para a pasta Excluídas">Excluir</button></div>';
+          return h;
+        }
+        function telaMapear() {
+          var h = '<div class="dica">Antes de medir, liste o que vai medir: clique num pino na placa e use <b>+ Pino selecionado</b>, ou digite o nome da linha (net).</div>';
+          h += '<div class="add"><button class="b addpino">+ Pino selecionado</button><input class="netin" list="r2fx-nets" placeholder="Net (ex.: PPBUS_AON)"><button class="b addnet">+ Net</button></div>';
+          h += '<datalist id="r2fx-nets">' + netsDaPlaca().slice(0, 4000).map(function (n) { return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
+          if (!F.pontos.length) return h + '<div class="vazio">Nenhum ponto mapeado ainda.</div>';
+          F.pontos.forEach(function (p, i) {
+            h += '<div class="pt" data-i="' + i + '"><div class="l1"><span class="num">' + (i + 1) + '</span><span class="alvo" title="Mostrar na placa">' + esc(p.alvo) + '</span>' +
+              '<span class="tipo">' + (p.tipo === 'pino' ? 'pino' : 'net') + '</span>' +
+              '<button class="b mini sobe" title="Subir">↑</button><button class="b mini desce" title="Descer">↓</button><button class="b mini perigo tira" title="Tirar da lista">×</button></div>' +
+              '<div class="l2"><select class="modo">' + Object.keys(MODOS).map(function (k) { return '<option value="' + k + '"' + (p.modo === k ? ' selected' : '') + '>' + MODOS[k] + '</option>'; }).join('') + '</select>' +
+              '<input class="esp" value="' + esc(p.esperado || '') + '" placeholder="Esperado (opcional)"></div></div>';
+          });
+          h += '<button class="b pri irgravar">' + (F.leituras.length ? 'Gravar Leitura ' + (F.leituras.length + 1) + ' ›' : 'Começar a Leitura 1 ›') + '</button>';
+          return h;
+        }
+        function telaGravar() {
+          if (!F.pontos.length) return '<div class="vazio">Mapeie os pontos primeiro (etapa 1).</div>';
+          if (!F.leituras.length) return '<div class="vazio">Nenhuma leitura ainda.</div><button class="b pri novaleit">Começar a Leitura 1</button>';
+          if (!LEIT || LEIT > F.leituras.length) LEIT = F.leituras.length;
+          var L = leitura(LEIT);
+          var h = '<div class="leit"><span class="tit">Leitura ' + LEIT + '</span><span class="hora">' + esc(L.em) + '</span>' +
+            (F.leituras.length > 1 ? '<select class="qual">' + F.leituras.map(function (x) { return '<option value="' + x.n + '"' + (x.n === LEIT ? ' selected' : '') + '>Leitura ' + x.n + '</option>'; }).join('') + '</select>' : '') +
+            '<button class="b mini pri novaleit" title="Nova leitura agora (com data e hora)">+ Nova leitura</button></div>';
+          h += '<div class="g2"><label class="f">Consumo na fonte nesta leitura<input data-l="consumo" value="' + esc(L.consumo || '') + '" placeholder="20 V 0,20 A"></label>' +
+            '<label class="f">Nota da leitura<input data-l="nota" value="' + esc(L.nota || '') + '" placeholder="Ex.: depois de trocar o U7000"></label></div>';
+          h += '<div class="dica">Digite o valor e aperte Enter: vai para o próximo ponto e mostra ele na placa.</div>';
+          F.pontos.forEach(function (p, i) {
+            var v = val(p, LEIT) || {}, ant = LEIT > 1 ? val(p, LEIT - 1) : null;
+            h += '<div class="pt' + (i === CUR ? ' cur' : '') + '" data-i="' + i + '"><div class="l1"><span class="num">' + (i + 1) + '</span><span class="alvo" title="Mostrar na placa">' + esc(p.alvo) + '</span>' +
+              '<span class="tipo">' + esc(MODOS[p.modo] || p.modo) + '</span></div>' +
+              '<div class="l2"><input class="val" value="' + esc(v.x || '') + '" placeholder="' + (UNI[p.modo] ? 'valor em ' + UNI[p.modo] : 'valor') + '" inputmode="decimal">' +
+              '<span class="st"><button class="ok' + (v.st === 'ok' ? ' on' : '') + '" title="Valor normal">OK</button><button class="ruim' + (v.st === 'ruim' ? ' on' : '') + '" title="Valor anormal">Anormal</button></span></div>' +
+              ((p.esperado || ant || v.em) ? '<div class="ant">' + [p.esperado ? 'Esperado <b>' + esc(p.esperado) + '</b>' : '', ant && ant.x ? 'Leitura ' + (LEIT - 1) + ': <b>' + esc(ant.x) + '</b>' : '', v.em ? 'medido às ' + esc(hora(v.em)) : '', v.hist && v.hist.length ? 'antes: ' + v.hist.map(function (x) { return esc(x.x); }).join(', ') : ''].filter(Boolean).join(' · ') + '</div>' : '') +
+              '</div>';
+          });
+          return h;
+        }
+        function telaComp() {
+          if (!F.pontos.length || !F.leituras.length) return '<div class="vazio">O comparativo aparece depois da primeira leitura.</div>';
+          var Ls = F.leituras;
+          var h = '<div class="dica">Cada coluna é uma leitura com data e hora. Em dourado: valor que mudou em relação à leitura anterior.</div><div class="tbl"><table><thead><tr><th>Ponto</th><th>Esperado</th>';
+          Ls.forEach(function (L) { h += '<th><span class="h">Leitura ' + L.n + '</span>' + esc(L.em) + (L.nota ? '<br>' + esc(L.nota) : '') + '</th>'; });
+          h += '</tr></thead><tbody>';
+          F.pontos.forEach(function (p) {
+            h += '<tr><td class="alvo" data-alvo="' + esc(p.alvo) + '">' + esc(p.alvo) + '<span class="r" style="color:var(--sub);font-weight:500;display:block;font-size:10.5px">' + esc(MODOS[p.modo] || '') + '</span></td><td>' + esc(p.esperado || '—') + '</td>';
+            var antes = null;
+            Ls.forEach(function (L) {
+              var v = val(p, L.n), x = v && v.x ? v.x : '';
+              var cls = [];
+              if (x && antes != null && antes !== x) cls.push('mud');
+              if (v && v.st === 'ruim') cls.push('ruim'); else if (v && v.st === 'ok') cls.push('ok');
+              h += '<td class="' + cls.join(' ') + '">' + (x ? esc(x) + (UNI[p.modo] ? ' ' + UNI[p.modo] : '') : '—') + '</td>';
+              if (x) antes = x;
+            });
+            h += '</tr>';
+          });
+          h += '<tr class="cons"><td>Consumo na fonte</td><td>' + esc(F.consumo || '—') + '</td>';
+          Ls.forEach(function (L) { h += '<td>' + esc(L.consumo || '—') + '</td>'; });
+          h += '</tr></tbody></table></div>';
+          h += '<details class="sec" open><summary>Reparo e resultado</summary><div class="in">' +
+            '<label class="f">O que encontrou<textarea data-k="achado" placeholder="Curto em PPBUS_AON, U7000 esquentando…">' + esc(F.achado) + '</textarea></label>' +
+            '<label class="f">O que foi trocado / feito<textarea data-k="trocado">' + esc(F.trocado) + '</textarea></label>' +
+            '<div class="res3">' + Object.keys(RES).map(function (k) { return '<button class="b res' + (F.resultado === k ? ' on' : '') + '" data-r="' + k + '">' + RES[k] + '</button>'; }).join('') + '</div>' +
+            '</div></details>';
+          return h;
+        }
+        function ligar() {
+          var q = function (s) { return HOST.querySelector(s); }, qa = function (s) { return HOST.querySelectorAll(s); };
+          if (!F) {
+            if (q('.nova')) q('.nova').onclick = nova;
+            qa('.lista .ficha').forEach(function (d) { d.onclick = function () { abrirFicha(d.dataset.id); }; });
+            return;
+          }
+          q('.volta').onclick = fecharFicha;
+          q('.apaga').onclick = function () {
+            var b = q('.apaga');
+            if (!b.dataset.c) { b.dataset.c = '1'; b.textContent = 'Clique de novo para excluir'; setTimeout(function () { if (b.isConnected) { b.dataset.c = ''; b.textContent = 'Excluir'; } }, 3500); return; }
+            var a = API(); clearTimeout(TSAVE);
+            if (F.id && a && a.fichaApagar) a.fichaApagar(F.id).catch(function () {});
+            F = null; lembrar(); carregarLista();
+          };
+          qa('[data-k]').forEach(function (el) {
+            el.addEventListener('input', function () { F[el.dataset.k] = el.value; salvar(); });
+            el.addEventListener('change', function () { var t = HOST.querySelector('.topo h3'); if (t && (el.dataset.k === 'modelo' || el.dataset.k === 'placa' || el.dataset.k === 'os')) desenharDepois(); });
+          });
+          qa('.etapas button').forEach(function (b) { b.onclick = function () { ETAPA = b.dataset.e; if (ETAPA === 'gravar' && !LEIT) LEIT = F.leituras.length; CUR = -1; desenhar(); }; });
+          qa('.alvo').forEach(function (el) { el.onclick = function () { var a = el.dataset.alvo || el.textContent; if (!irPara(a)) aviso('Não achei «' + a + '» na placa aberta.'); }; });
+          if (ETAPA === 'mapear') {
+            var addN = function () { var i = q('.netin'); if (addPonto(i.value, 'net')) { i.value = ''; desenhar(); var n = HOST.querySelector('.netin'); if (n) n.focus(); } };
+            if (q('.addnet')) q('.addnet').onclick = addN;
+            if (q('.netin')) q('.netin').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); addN(); } };
+            if (q('.addpino')) q('.addpino').onclick = function () {
+              var s = pinoSelecionado(); if (!s) { aviso('Clique num pino na placa primeiro.'); return; }
+              if (addPonto(s.alvo, 'pino')) desenhar();
+            };
+            qa('.pt').forEach(function (div) {
+              var i = +div.dataset.i, p = F.pontos[i];
+              div.querySelector('.modo').onchange = function (e) { p.modo = e.target.value; salvar(); };
+              div.querySelector('.esp').oninput = function (e) { p.esperado = e.target.value; salvar(); };
+              div.querySelector('.tira').onclick = function () { F.pontos.splice(i, 1); salvar(); desenhar(); };
+              div.querySelector('.sobe').onclick = function () { if (i > 0) { F.pontos.splice(i - 1, 0, F.pontos.splice(i, 1)[0]); salvar(); desenhar(); } };
+              div.querySelector('.desce').onclick = function () { if (i < F.pontos.length - 1) { F.pontos.splice(i + 1, 0, F.pontos.splice(i, 1)[0]); salvar(); desenhar(); } };
+            });
+            if (q('.irgravar')) q('.irgravar').onclick = novaLeitura;
+          } else if (ETAPA === 'gravar') {
+            qa('.novaleit').forEach(function (b) { b.onclick = novaLeitura; });
+            if (q('.qual')) q('.qual').onchange = function (e) { LEIT = +e.target.value; CUR = -1; desenhar(); };
+            qa('[data-l]').forEach(function (el) { el.addEventListener('input', function () { var L = leitura(LEIT); if (L) { L[el.dataset.l] = el.value; salvar(); } }); });
+            qa('.pt').forEach(function (div) {
+              var i = +div.dataset.i, inp = div.querySelector('input.val');
+              inp.onfocus = function () { if (CUR !== i) { CUR = i; qa('.pt').forEach(function (d) { d.classList.toggle('cur', +d.dataset.i === i); }); irPara(F.pontos[i].alvo); } };
+              inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); inp.dataset.feito = '1'; gravarValor(i, inp.value, true); } };
+              inp.onblur = function () { if (inp.dataset.feito) { inp.dataset.feito = ''; return; } if (!HOST.querySelector('.veu')) gravarValor(i, inp.value, false); };
+              div.querySelector('.st .ok').onclick = function () { marcar(i, 'ok'); };
+              div.querySelector('.st .ruim').onclick = function () { marcar(i, 'ruim'); };
+            });
+          } else {
+            qa('.res3 button').forEach(function (b) { b.onclick = function () { F.resultado = F.resultado === b.dataset.r ? '' : b.dataset.r; salvar(); desenhar(); }; });
+          }
+        }
+        var TDES = 0; function desenharDepois() { clearTimeout(TDES); TDES = setTimeout(function () { var a = document.activeElement; if (a) a.blur(); desenhar(); }, 50); }
+        function marcar(i, st) {
+          var p = F.pontos[i]; p.vals = p.vals || {};
+          var v = p.vals[String(LEIT)] || (p.vals[String(LEIT)] = { x: '', em: agora(), st: '' });
+          v.st = v.st === st ? '' : st; salvar(); desenhar();
+        }
+
+        // ── encaixe na coluna do Ponto a ponto ───────────────────────────────────────────────────────────
+        function montar() {
+          var h = document.getElementById('r2ficha-host');
+          if (h && h !== HOST) {
+            HOST = h;
+            var a = API();
+            if (a && a.fichaBancada) a.fichaBancada().then(function (j) { BANC = (j && j.bancada) || null; if (!F) desenhar(); }).catch(function () {});
+            var ult = ''; try { ult = localStorage.getItem('r2ficha-aberta') || ''; } catch (e) {}
+            if (ult) abrirFicha(ult);
+            carregarLista();
+          }
+          // estudo rodando (aberto pelo painel Estudos): o executor aparece por cima da ficha
+          var seq = window.__r2seq, run = !!(seq && seq.active);
+          document.body.classList.toggle('r2-seqrun', run);
+          var sh = document.getElementById('r2seq-host');
+          var est = document.body.classList.contains('r2-est-run') && window.__r2EstRun;
+          var bar0 = sh && sh.querySelector('.r2seq-volta');
+          if (bar0) {
+            var want = est ? 'est' : 'ficha';
+            if (bar0.dataset.modo !== want) {
+              bar0.dataset.modo = want;
+              bar0.querySelector('button').textContent = est ? '‹ Estudos' : '‹ Voltar para a ficha';
+              bar0.querySelector('span').innerHTML = est ? '<b style="color:#D4B26A">' + String(est.placa || '').replace(/[<>&]/g, '') + '</b> · ' + String(est.tema || '').replace(/[<>&]/g, '') : 'Estudo aberto pelo painel Estudos';
+            }
+          }
+          if (sh && !sh.querySelector('.r2seq-volta')) {
+            var bar = document.createElement('div'); bar.className = 'r2seq-volta';
+            bar.innerHTML = '<button class="b" style="border:1px solid var(--border,#4a4b52);background:var(--bg-tertiary,#2a2b30);color:inherit;border-radius:6px;padding:4px 9px;font:inherit;font-size:12px;cursor:pointer">‹ Voltar para a ficha</button><span>Estudo aberto pelo painel Estudos</span>';
+            bar.querySelector('button').onclick = function () {
+              var deEst = document.body.classList.contains('r2-est-run');
+              try { seq.stop(); seq.open(null); } catch (e) {}
+              document.body.classList.remove('r2-seqrun');
+              if (deEst && window.__r2EstAbrir) window.__r2EstAbrir();   // volta para a lista de estudos
+            };
+            sh.insertBefore(bar, sh.firstChild);
+          }
+        }
+        // Roger 21/10/2026: «quando chegar no final, no último ponto, pode ter um card: reiniciar ou… voltar passo a passo»
+        var FIM_VISTO = '';
+        function cardFim() {
+          var seq = window.__r2seq, sh = document.getElementById('r2seq-host');
+          var c = sh && sh.querySelector('.r2-fim');
+          var ok = seq && seq.active && seq.on && (seq.active.steps || []).length > 1 && seq.pos === seq.active.steps.length - 1;
+          var chave = ok ? seq.active.id + ':' + seq.active.steps.length : '';
+          if (!ok) { if (c) c.remove(); if (seq && seq.active && seq.pos < (seq.active.steps || []).length - 1) FIM_VISTO = ''; return; }
+          if (c || FIM_VISTO === chave) return;
+          c = document.createElement('div'); c.className = 'r2-fim';
+          c.innerHTML = '<div class="t">Último ponto do estudo</div><div class="s">Você chegou ao passo ' + seq.active.steps.length + ' de ' + seq.active.steps.length + '.</div>' +
+            '<div class="b3"><button class="rf-re">↺ Reiniciar do começo</button><button class="rf-volta">◀ Voltar passo a passo</button><button class="rf-fim">Encerrar</button></div>';
+          var bar = sh.querySelector('.r2seq-volta');
+          sh.insertBefore(c, bar ? bar.nextSibling : sh.firstChild);
+          c.querySelector('.rf-re').onclick = function () { FIM_VISTO = ''; c.remove(); try { seq.go(0); } catch (e) {} };
+          c.querySelector('.rf-volta').onclick = function () { FIM_VISTO = chave; c.remove(); try { seq.prev(); } catch (e) {} };
+          c.querySelector('.rf-fim').onclick = function () { FIM_VISTO = chave; c.remove(); var b = sh.querySelector('.r2seq-volta button'); if (b) b.click(); };
+        }
+        setInterval(function () { montar(); cardFim(); }, 600);
+      })();
+    </script>
+  
+    <script id="r2-lente-js">
+      /* Lente de aumento onde o mouse passa — opcional (Roger, 21/10/2026: «add um zoom onde o mouse passar… como uma
+         lente… isso ajuda no estudo… como opção»). Liga/desliga no botão «Lente» no canto da placa ou na tecla L.
+         Funciona na placa (boardview) e nas imagens do estudo. */
+      (function () {
+        var ON = false; try { ON = localStorage.getItem('2r-lente') === '1'; } catch (e) {}
+        var Z = 1.8, D = 360, mx = -1, my = -1, alvo = null, pend = false;
+        var lens = document.createElement('canvas'); lens.id = 'r2-lente';
+        lens.style.cssText = 'position:fixed;z-index:9500;pointer-events:none;border-radius:50%;border:2px solid #D4B26A;' +
+          'box-shadow:0 8px 28px rgba(0,0,0,.6);display:none;width:' + D + 'px;height:' + D + 'px;background:#0d0e10';
+        var btn = document.createElement('button'); btn.id = 'r2-lente-btn'; btn.type = 'button';
+        btn.title = 'Lente de aumento onde o mouse passa (tecla L)';
+        btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/><path d="M10.5 8v5M8 10.5h5"/></svg><span>Lente</span>';
+        var st = document.createElement('style');
+        st.textContent = '#r2-lente-btn{position:absolute;bottom:12px;left:12px;z-index:40;display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:8px;' +
+          'border:1px solid rgba(212,178,106,.45);background:rgba(16,17,20,.82);color:#cfd2d6;font:600 12px Inter,-apple-system,sans-serif;cursor:pointer}' +
+          '#r2-lente-btn:hover{border-color:#D4B26A;color:#D4B26A}#r2-lente-btn.on{background:rgba(212,178,106,.2);border-color:#D4B26A;color:#D4B26A}' +
+          'body.r2-lente-on .board-panel-canvas canvas, body.r2-lente-on #r2lei .prints img{cursor:none}';
+        document.head.appendChild(st);
+        function pinta() { btn.classList.toggle('on', ON); document.body.classList.toggle('r2-lente-on', ON); if (!ON) { lens.style.display = 'none'; window.__r2Lente = null; try { window.__2rRend.needsRender = true; } catch (e) {} } }
+        function troca() { ON = !ON; try { localStorage.setItem('2r-lente', ON ? '1' : '0'); } catch (e) {} pinta(); }
+        btn.addEventListener('click', function (e) { e.stopPropagation(); troca(); });
+        document.addEventListener('keydown', function (e) {
+          if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            var t = e.target; if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+            troca();
+          }
+        }, true);
+        function canvases() {
+          var R = window.__2rRend, gl = R && R.app && (R.app.canvas || R.app.view);
+          if (!gl || !gl.parentElement) return null;
+          return { R: R, gl: gl, box: gl.parentElement, todas: Array.prototype.slice.call(gl.parentElement.querySelectorAll('canvas')) };
+        }
+        function lugarBtn() {
+          var c = canvases(); if (!c) { if (btn.parentNode) btn.remove(); return; }
+          var root = c.box.parentElement || c.box;
+          if (btn.parentNode !== root) { if (getComputedStyle(root).position === 'static') root.style.position = 'relative'; root.appendChild(btn); }
+        }
+        setInterval(lugarBtn, 1000);
+        document.addEventListener('mousemove', function (e) {
+          if (!ON) return;
+          mx = e.clientX; my = e.clientY;
+          var t = e.target, c = canvases();
+          if (c && t && t.tagName === 'CANVAS' && c.box.contains(t)) alvo = { tipo: 'placa', c: c };
+          else if (t && t.tagName === 'IMG' && t.closest && t.closest('#r2lei')) alvo = { tipo: 'img', img: t };
+          else alvo = null;
+          if (!alvo) { lens.style.display = 'none'; window.__r2Lente = null; return; }
+          if (!pend) { pend = true; requestAnimationFrame(desenha); }
+        }, true);
+        document.addEventListener('mouseleave', function () { lens.style.display = 'none'; });
+        function desenha() {
+          pend = false;
+          if (!ON || !alvo) return;
+          if (!lens.parentNode) document.documentElement.appendChild(lens);   // fora do body (o body tem zoom 1.15)
+          var dpr = window.devicePixelRatio || 1, W = Math.round(D * dpr);
+          if (lens.width !== W) { lens.width = W; lens.height = W; }
+          var g = lens.getContext('2d'); g.clearRect(0, 0, W, W); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+          var meio = D / (2 * Z);               // metade do pedaço da tela (em px CSS) que aparece na lente
+          if (alvo.tipo === 'placa') {
+            // valores (cards) dos pinos sob a lente: o Ripper desenha os que estão dentro deste círculo (21/10/2026)
+            var lc = alvo.c.todas.filter(function (cv) { return cv !== alvo.c.gl; })[0] || alvo.c.gl, lr = lc.getBoundingClientRect(), kz = lc.clientWidth / (lr.width || 1);
+            var novo = { x: (mx - lr.left) * kz, y: (my - lr.top) * kz, r: meio * kz };
+            var ant = window.__r2Lente; window.__r2Lente = novo;
+            if (!ant || Math.abs(ant.x - novo.x) + Math.abs(ant.y - novo.y) > 0.5) {
+              try { alvo.c.R.needsRender = true; } catch (e) {}
+              setTimeout(function () { if (ON && alvo && !pend) { pend = true; requestAnimationFrame(desenha); } }, 60);   // redesenha com os valores já atualizados
+            }
+            try { alvo.c.R.app.renderer.render(alvo.c.R.app.stage); } catch (e) {}   // WebGL: desenha agora para poder copiar
+            alvo.c.todas.forEach(function (cv) {
+              if (cv.classList.contains('r2-x')) return;
+              var r = cv.getBoundingClientRect(); if (!r.width || cv.closest('.board-minimap')) return;
+              var k = cv.width / r.width;
+              try { g.drawImage(cv, (mx - meio - r.left) * k, (my - meio - r.top) * k, 2 * meio * k, 2 * meio * k, 0, 0, W, W); } catch (e) {}
+            });
+          } else {
+            var im = alvo.img, r = im.getBoundingClientRect(), kx = im.naturalWidth / r.width, ky = im.naturalHeight / r.height;
+            try { g.drawImage(im, (mx - meio - r.left) * kx, (my - meio - r.top) * ky, 2 * meio * kx, 2 * meio * ky, 0, 0, W, W); } catch (e) {}
+          }
+          // mira no centro
+          g.strokeStyle = 'rgba(212,178,106,.7)'; g.lineWidth = 1.2 * dpr;
+          g.beginPath(); g.moveTo(W / 2 - 8 * dpr, W / 2); g.lineTo(W / 2 + 8 * dpr, W / 2); g.moveTo(W / 2, W / 2 - 8 * dpr); g.lineTo(W / 2, W / 2 + 8 * dpr); g.stroke();
+          lens.style.left = (mx - D / 2) + 'px'; lens.style.top = (my - D / 2) + 'px'; lens.style.display = 'block';
+        }
+        pinta();
+      })();
+    </script>
+
+    <!-- 2R (Roger, 22/10/2026): card do passo a passo SOLTO dentro do painel da placa — arrasta para onde quiser,
+         nunca sai do programa, e o ALFINETE trava no lugar. Lembra posição e alfinete (padrão do app).
+         Dois cliques (sem alfinete) voltam ao lugar de fábrica: embaixo, no centro. -->
+    <style id="r2-hud-solto">
+      .r2gd-hud.r2-solto { left:0; top:0; bottom:auto !important; transform:none !important; }
+      .r2gd-hud.r2-livre { cursor:grab; }
+      .r2gd-hud.r2-arrastando { cursor:grabbing; opacity:.92; user-select:none; }
+      .r2gd-hud button, .r2gd-hud a, .r2gd-hud input { cursor:pointer; }
+      .r2gd-hud .r2-pino { position:absolute; top:4px; right:4px; width:22px; height:22px; padding:0; border:0; border-radius:5px;
+        background:transparent; color:var(--text-secondary,#9aa0a6); display:flex; align-items:center; justify-content:center; z-index:2; }
+      .r2gd-hud .r2-pino:hover { background:rgba(255,255,255,.08); }
+      .r2gd-hud .r2-pino.on { color:#ffffff; }
+      .r2gd-hud .r2-pino svg { width:14px; height:14px; }
+    </style>
+    <script>
+      (function () {
+        'use strict';
+        var CHAVE = 'r2gd-hud-pos2', PINO = 'r2gd-hud-pino';
+        var SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3H7l3-3z"/><path d="M12 13v7"/></svg>';
+        function ler(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
+        function gravar(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+        try { localStorage.removeItem('r2gd-hud-pos'); } catch (e) {}          // posição antiga (podia ficar fora do programa)
+        function pai(hud) { return hud.offsetParent || hud.parentElement; }
+        function folga(hud) { var p = pai(hud); return { w: Math.max(0, p.clientWidth - hud.offsetWidth), h: Math.max(0, p.clientHeight - hud.offsetHeight) }; }
+        function cola(v) { return Math.max(0, Math.min(1, v)); }
+        // posição guardada em fração do espaço livre do painel (0 a 1): mudar o tamanho da janela nunca joga o card para fora
+        function aplicar(hud) {
+          var p = ler(CHAVE);
+          if (!p || !isFinite(p.fx) || !isFinite(p.fy)) { hud.classList.remove('r2-solto'); hud.style.removeProperty('left'); hud.style.removeProperty('top'); return; }
+          var f = folga(hud);
+          hud.classList.add('r2-solto');
+          hud.style.setProperty('left', Math.round(cola(p.fx) * f.w) + 'px', 'important');
+          hud.style.setProperty('top', Math.round(cola(p.fy) * f.h) + 'px', 'important');
+        }
+        function pinado() { return ler(PINO) === true; }
+        function marcarPino(hud) {
+          var b = hud.querySelector('.r2-pino'), on = pinado();
+          if (b) { b.classList.toggle('on', on); b.title = on ? 'Preso no lugar — clique para soltar' : 'Solto — arraste o card · clique para prender no lugar'; b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+          hud.classList.toggle('r2-livre', !on);
+        }
+        function poePino(hud) {
+          if (hud.querySelector('.r2-pino')) return;
+          var b = document.createElement('button'); b.type = 'button'; b.className = 'r2-pino'; b.innerHTML = SVG;
+          b.addEventListener('click', function (e) { e.stopPropagation(); gravar(PINO, !pinado()); varrer(); });
+          b.addEventListener('dblclick', function (e) { e.stopPropagation(); });
+          hud.appendChild(b);
+        }
+        function preparar(hud) {
+          poePino(hud); marcarPino(hud);
+          if (!hud.classList.contains('r2-arrastando')) aplicar(hud);
+          if (hud.__r2solto) return;
+          hud.__r2solto = true;
+          hud.addEventListener('pointerdown', function (ev) {
+            if (ev.button !== 0 || pinado() || ev.target.closest('button,a,input,select,textarea')) return;
+            var pr = pai(hud).getBoundingClientRect(), r = hud.getBoundingClientRect();
+            var dx = ev.clientX - r.left, dy = ev.clientY - r.top, moveu = false;
+            function mover(e) {
+              var f = folga(hud);
+              var x = Math.max(0, Math.min(e.clientX - pr.left - dx, f.w)), y = Math.max(0, Math.min(e.clientY - pr.top - dy, f.h));
+              if (!moveu) { moveu = true; hud.classList.add('r2-solto', 'r2-arrastando'); }
+              hud.style.setProperty('left', x + 'px', 'important'); hud.style.setProperty('top', y + 'px', 'important');
+            }
+            function soltar() {
+              document.removeEventListener('pointermove', mover); document.removeEventListener('pointerup', soltar);
+              hud.classList.remove('r2-arrastando');
+              if (moveu) { var f = folga(hud); gravar(CHAVE, { fx: f.w ? hud.offsetLeft / f.w : 0.5, fy: f.h ? hud.offsetTop / f.h : 1 }); }
+            }
+            document.addEventListener('pointermove', mover); document.addEventListener('pointerup', soltar);
+            ev.preventDefault();
+          });
+          hud.addEventListener('dblclick', function (ev) {
+            if (pinado() || ev.target.closest('button,a,input,select,textarea')) return;
+            gravar(CHAVE, null); aplicar(hud);
+          });
+        }
+        function varrer() { var l = document.querySelectorAll('.r2gd-hud'); for (var i = 0; i < l.length; i++) preparar(l[i]); }
+        function iniciar() {
+          varrer();
+          new MutationObserver(function (ms) {
+            for (var i = 0; i < ms.length; i++) if (ms[i].addedNodes.length) { varrer(); return; }
+          }).observe(document.body, { childList: true, subtree: true });
+          window.addEventListener('resize', varrer);
+        }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar); else iniciar();
+      })();
+    </script>
+      <!-- 2R (Roger, 24/10/2026): «quando clico em um, acende dois; quando clico em OBD não acende nada e continua o outro aceso».
+         Barra de ícones da esquerda: só UM aceso por vez — o último clicado (enquanto o painel dele estiver aberto; o OBD fica
+         aceso até clicar em outro). Aceso = fundo preto + contorno branco fino + ícone dourado; os outros ficam apagados. -->
+    <style id="r2-rail-um">
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item:not(.r2-lit):not(.activity-rail-foot):not(.activity-rail-status),
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item:not(.r2-lit):not(.activity-rail-foot):not(.activity-rail-status) .activity-rail-ico,
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item:not(.r2-lit):not(.activity-rail-foot):not(.activity-rail-status) .activity-rail-cap {
+        color: var(--text-secondary, #9aa0a6) !important; background: transparent !important; box-shadow: none !important; }
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item:not(.r2-lit):not(.activity-rail-foot):not(.activity-rail-status):hover,
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item:not(.r2-lit):not(.activity-rail-foot):not(.activity-rail-status):hover .activity-rail-ico,
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item:not(.r2-lit):not(.activity-rail-foot):not(.activity-rail-status):hover .activity-rail-cap {
+        color: var(--text-primary, #E6E8EB) !important; background: #23262B !important; }
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item:not(.activity-rail-foot):not(.activity-rail-status):before { display: none !important; }
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item.r2-lit.r2-lit {
+        background: #000000 !important; box-shadow: inset 0 0 0 1px rgba(255,255,255,.85) !important; border-radius: 8px !important; }
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item.r2-lit.r2-lit .activity-rail-ico,
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item.r2-lit.r2-lit .activity-rail-cap,
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item.r2-lit.r2-lit { color: #D4B26A !important; }
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item:focus-visible { outline: none !important; }
+      /* botão da barra de status (embaixo): o contorno ficava cortado na borda da janela — agora com folga */
+      body.r2-rail-um .activity-rail .activity-rail-item.activity-rail-item.activity-rail-status {
+        box-sizing: border-box; margin: 4px 6px 8px !important; width: calc(100% - 12px) !important; height: 28px !important;
+        border-top: 0 !important; border-radius: 6px !important; }
+    </style>
+    <script>
+      (function () {
+        'use strict';
+        var SEL = null;
+        function itens() {
+          return Array.prototype.filter.call(document.querySelectorAll('.activity-rail .activity-rail-item'), function (x) {
+            return !x.classList.contains('activity-rail-foot') && !x.classList.contains('activity-rail-status'); });
+        }
+        function estAberto() { var e = document.getElementById('2r-est-btn');
+          return !!e && (e.classList.contains('active') || document.body.classList.contains('r2-est-run')); }
+        function aberto(el) {
+          if (el.id === '2r-obd-btn') return true;                       // ação: fica aceso até clicar em outro
+          if (el.id === '2r-est-btn') return estAberto();
+          return el.classList.contains('active') || el.classList.contains('r2-acv-on') || el.getAttribute('aria-pressed') === 'true';
+        }
+        function upd() {
+          if (!document.body) return;
+          var its = itens(); if (!its.length) return;
+          var lit = null;
+          if (SEL && SEL.isConnected && its.indexOf(SEL) >= 0 && aberto(SEL)) lit = SEL;
+          else {
+            SEL = null;
+            if (estAberto()) lit = document.getElementById('2r-est-btn');
+            else for (var i = 0; i < its.length; i++) { if (its[i].id !== '2r-obd-btn' && aberto(its[i])) { lit = its[i]; break; } }
+          }
+          its.forEach(function (x) { if (x.classList.contains('r2-lit') !== (x === lit)) x.classList.toggle('r2-lit', x === lit); });
+          if (!document.body.classList.contains('r2-rail-um')) document.body.classList.add('r2-rail-um');
+        }
+        document.addEventListener('click', function (e) {
+          var t = e.target && e.target.closest && e.target.closest('.activity-rail-item');
+          if (!t || t.classList.contains('activity-rail-foot') || t.classList.contains('activity-rail-status')) return;
+          SEL = t; upd(); setTimeout(upd, 0); setTimeout(upd, 120); setTimeout(upd, 400);
+        }, true);
+        window.__r2RailUpd = upd;
+        setInterval(upd, 600);   // 26/10/2026: 250 → 600 ms (clique já atualiza na hora)
+      })();
+    </script>
+    <script src="./r2-perguntas.js"></script>
+    <!-- 2R 26/10/2026 (Roger: «coloca uma opção para fazer a busca exata ou similares»): chave Exata | Similares na
+         busca da placa e na do PDF (cada uma com a sua escolha); Exata = só o nome inteiro (C510 não acha C5102,
+         PP3V3 não acha PP3V3_S5) -->
+    <style>
+      .r2ex{display:inline-flex;border:1px solid var(--border,#3a3b40);border-radius:12px;overflow:hidden;flex:0 0 auto;font:11px Inter,-apple-system,"Segoe UI",sans-serif}
+      .r2ex button{border:0;background:transparent;color:var(--text-secondary,#999);padding:2px 8px;cursor:pointer;font:inherit;line-height:16px}
+      .r2ex button.on{background:rgba(212,178,106,.18);color:#D4B26A;font-weight:700}
+      .search-tab-input-wrap .r2ex{margin-top:5px}
+      .pdf-search-wrapper .r2ex{margin-left:6px;height:20px;align-self:center}
+    </style>
+    <script>
+      (function () {
+        'use strict';
+        function mk(k) {
+          var w = document.createElement('div'); w.className = 'r2ex'; w.dataset.k = k;
+          w.innerHTML = '<button data-v="1" title="Só o nome inteiro (ex.: C510 não acha C5102)">Exata</button><button data-v="0" title="Acha também os parecidos (ex.: C510 acha C5102)">Geral</button>';
+          w.addEventListener('mousedown', function (e) { e.preventDefault(); });   // não tira o foco da busca
+          w.querySelectorAll('button').forEach(function (b) {
+            b.onclick = function () { var B = window.__r2BuscaExata; if (B) B.set(k, b.dataset.v === '1'); pinta(); };
+          });
+          return w;
+        }
+        function pinta() {
+          var B = window.__r2BuscaExata; if (!B) return;
+          document.querySelectorAll('.r2ex').forEach(function (w) {
+            var ex = B.get(w.dataset.k);
+            w.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', (b.dataset.v === '1') === ex); });
+          });
+        }
+        function poe() {
+          if (!window.__r2BuscaExata) return;
+          document.querySelectorAll('.search-tab-input-wrap').forEach(function (h) { if (!h.querySelector('.r2ex')) { h.appendChild(mk('bdv')); pinta(); } });
+          document.querySelectorAll('.pdf-search-wrapper').forEach(function (h) { if (!h.querySelector('.r2ex')) { var bar = h.querySelector('.pdf-search-bar'); h.insertBefore(mk('pdf'), bar ? bar.nextSibling : null); pinta(); } });
+        }
+        setInterval(poe, 1200);
+        window.addEventListener('2r-busca-exata', pinta);
+      })();
+    </script>
+    <!-- 2R 27/10/2026 (Roger: «o search é para ter um dentro da barra do PDF e outro no BDV, não precisa do geral em
+         cima… ficou repetido»): a busca geral do topo sai; a da placa fica EM CIMA DA PLACA (canto esquerdo), com
+         Exata | Geral; Ctrl/⌘+F com o mouse na placa vai para ela.
+         «se apertar o N, pula para o próximo resultado, sem inserir uma nova letra na busca»: Enter busca e tira o
+         cursor do campo; aí N / Shift+N andam pelos resultados (placa: peças achadas ou pinos da net; PDF: ocorrências).
+         Esc (fora do campo) volta o N para o ponto a ponto. -->
+    <style>
+      .toolbar-search-wrap { display:none !important; }
+      /* 2R 27/10/2026 (Roger: «no Windows, no BoardRipper não tem o ícone para trocar o tema… uma bolinha meia branca e meia preta»):
+         no Windows a barra de cima passa da largura e empurrava o botão do tema para fora da tela; agora ele fica preso no canto direito */
+      .toolbar { position:relative; padding-right:54px !important; }
+      .toolbar > .r2-theme-btn { position:absolute; right:8px; top:50%; transform:translateY(-50%); margin:0; z-index:6; }
+      #r2bb { position:absolute; top:7px; left:10px; z-index:30; display:flex; align-items:center; gap:8px; padding:6px 8px;
+              background:rgba(20,21,24,.92); border:1px solid var(--border,#2e2f34); border-radius:9px; font:12.5px Inter,-apple-system,"Segoe UI",sans-serif; }
+      #r2bb input { width:230px; height:26px; background:var(--bg-primary,#141518); color:var(--text-primary,#e8e8e8); border:1px solid var(--border,#3a3b40);
+                    border-radius:6px; padding:0 8px; font:inherit; outline:none; }
+      #r2bb input:focus { border-color:#D4B26A; box-shadow:0 0 0 3px rgba(212,178,106,.15); }
+      #r2bb .n { color:var(--text-secondary,#999); font-size:11.5px; min-width:60px; white-space:nowrap; }
+      #r2bb .n b { color:#D4B26A; }
+      #r2bb .x { border:0; background:transparent; color:var(--text-secondary,#999); cursor:pointer; font-size:15px; padding:0 2px; }
+      /* 2R 27/10/2026 (Roger: «o search do PDF está encavalado, manter o mesmo padrão e localização do BDV»): busca do PDF
+         solta no canto de cima à esquerda do PDF, com a mesma caixa, campo e Exata | Geral da busca da placa; a barra do PDF desce para não encavalar */
+      .pdf-viewer > .r2pb { position:absolute; top:10px; left:10px; z-index:30; display:flex; align-items:center; gap:8px; padding:6px 8px; max-width:calc(100% - 20px);
+              background:rgba(20,21,24,.92); border:1px solid var(--border,#2e2f34); border-radius:9px; font:12.5px Inter,-apple-system,"Segoe UI",sans-serif; box-sizing:border-box; }
+      .pdf-viewer > .r2pb .pdf-search-bar { height:26px; border:0; background:transparent; overflow:visible; gap:4px; min-width:0; }
+      .pdf-viewer > .r2pb .pdf-search-form { flex:0 1 auto; min-width:0; }
+      .pdf-viewer > .r2pb .pdf-search-input { width:230px; max-width:100%; height:26px; background:var(--bg-primary,#141518); color:var(--text-primary,#e8e8e8);
+              border:1px solid var(--border,#3a3b40); border-radius:6px; padding:0 8px; font:inherit; }
+      .pdf-viewer > .r2pb .pdf-search-input:focus { border-color:#D4B26A; box-shadow:0 0 0 3px rgba(212,178,106,.15); }
+      .pdf-viewer > .r2pb .pdf-search-counter { color:var(--text-secondary,#999); font-size:11.5px; font-family:inherit; }
+      .pdf-viewer > .r2pb .r2ex { margin:0; height:auto; }
+      .pdf-viewer > .r2pb .pdf-search-recents, .pdf-viewer > .r2pb .pdf-multiterm-dropdown { top:100%; left:0; }
+      .pdf-viewer > .r2pb .pdf-lookup-hint { position:absolute; top:100%; left:0; margin-top:4px; z-index:30; }
+      .pdf-viewer > .pdf-toolbar { top:56px !important; }
+    </style>
+    <script>
+      (function () {
+        'use strict';
+        var BOX = null, INP = null, CNT = null, SEG = null, T = 0, NA_PLACA = false, LST = [], IX = -1;
+        function U() { return window.__2rBoardGet && window.__2rBoardGet(); }
+        function cont() { var R = window.__2rRend; return R && R.containerEl && R.containerEl.isConnected ? R.containerEl : null; }
+        function placa() { var u = U(); return u && u.activeTab && u.activeTab.board; }
+        function achados(q) {      // → [{p: partIndex, pin: pinIndex|null, nome}]
+          var b = placa(), f = window.__r2sd; if (!b || !q || !f) return [];
+          var Q = q.toUpperCase(), ql = q.toLowerCase(), out = [], net = null;
+          b.nets.forEach(function (_v, k) { if (!net && k.toUpperCase() === Q) net = k; });
+          var exP = b.parts.findIndex(function (p) { return p.name.toUpperCase() === Q; });
+          if (exP < 0 && net) {    // net: anda pelos pinos dela (peças de 2 pinos primeiro: mais fáceis de medir)
+            b.parts.forEach(function (p, pi) { p.pins.forEach(function (c, ci) { if (c.net === net) out.push({ p: pi, pin: ci, nome: p.name, k: p.pins.length <= 3 ? 0 : 1 }); }); });
+            return out.sort(function (a, c) { return a.k - c.k || a.nome.localeCompare(c.nome, undefined, { numeric: true }); });
+          }
+          b.parts.forEach(function (p, pi) {
+            if (f(p.name, ql) || p.pins.some(function (c) { return f(c.net || '', ql); })) out.push({ p: pi, pin: null, nome: p.name });
+          });
+          out.sort(function (a, c) { return (a.p === exP ? -1 : c.p === exP ? 1 : 0) || a.nome.localeCompare(c.nome, undefined, { numeric: true }); });
+          return out;
+        }
+        function mostra() {
+          if (!CNT) return;
+          var v = INP.value.trim();
+          CNT.innerHTML = !v ? '' : LST.length ? (IX >= 0 ? '<b>' + (IX + 1) + '</b> de ' + LST.length + ' · N próximo' : LST.length + ' achados') : 'nada achado';
+        }
+        function busca(v) {
+          var u = U(); if (!u) return;
+          try { u.setSearch(v); } catch (e) {}
+          LST = achados(v.trim()); IX = -1; mostra();
+        }
+        function foco(i) {
+          var u = U(), b = placa(); if (!u || !b || !LST.length) return;
+          IX = (i + LST.length) % LST.length;
+          var a = LST[IX];
+          if (window.__r2LadoPeca) window.__r2LadoPeca(a.nome);
+          if (a.pin != null) u.focusPinKeepZoom(a.p, a.pin); else u.focusPart(a.nome, { cause: 'search' });
+          mostra();
+        }
+        function pintaSeg() {
+          if (!SEG) return; var B = window.__r2BuscaExata, ex = !!(B && B.get('bdv'));
+          SEG.querySelectorAll('button').forEach(function (bt) { bt.classList.toggle('on', (bt.dataset.v === '1') === ex); });
+        }
+        function monta() {
+          var c = cont(); if (!c) return;
+          if (BOX && BOX.parentNode === c) { pintaSeg(); return; }
+          if (getComputedStyle(c).position === 'static') c.style.position = 'relative';
+          BOX = document.createElement('div'); BOX.id = 'r2bb';
+          BOX.innerHTML = '<input type="search" placeholder="Buscar na placa: componente ou net" autocomplete="off" spellcheck="false"><button class="x" title="Limpar">×</button>' +
+            '<div class="r2ex"><button data-v="1" title="Só o nome inteiro (ex.: C510 não acha C5102)">Exata</button><button data-v="0" title="Acha também os parecidos (ex.: C510 acha C5102)">Geral</button></div><span class="n"></span>';
+          INP = BOX.querySelector('input'); CNT = BOX.querySelector('.n'); SEG = BOX.querySelector('.r2ex');
+          ['pointerdown', 'mousedown', 'wheel', 'dblclick', 'click'].forEach(function (ev) { BOX.addEventListener(ev, function (e) { e.stopPropagation(); }); });
+          SEG.querySelectorAll('button').forEach(function (bt) {
+            bt.addEventListener('mousedown', function (e) { e.preventDefault(); });
+            bt.onclick = function () { var B = window.__r2BuscaExata; if (B) B.set('bdv', bt.dataset.v === '1'); pintaSeg(); if (INP.value.trim()) busca(INP.value); };
+          });
+          INP.addEventListener('keydown', function (e) {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+              e.preventDefault(); clearTimeout(T); busca(INP.value);
+              if (LST.length) { foco(0); window.__r2NBusca = 'bdv'; INP.blur(); }
+            } else if (e.key === 'Escape') { INP.value = ''; busca(''); window.__r2NBusca = null; INP.blur(); }
+          });
+          INP.addEventListener('input', function () { window.__r2NBusca = null; clearTimeout(T); T = setTimeout(function () { busca(INP.value); }, 180); });
+          BOX.querySelector('.x').onclick = function () { INP.value = ''; busca(''); window.__r2NBusca = null; INP.focus(); };
+          c.appendChild(BOX); pintaSeg();
+          var u = U(); if (u && u.searchQuery) { INP.value = u.searchQuery; LST = achados(u.searchQuery); mostra(); }
+        }
+        setInterval(monta, 1000);
+        document.addEventListener('pointerdown', function (e) { var c = cont(); NA_PLACA = !!(c && c.contains(e.target)); }, true);
+        function digitando(t) { return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable); }
+        window.addEventListener('keydown', function (e) {
+          // N / Shift+N nos resultados da placa
+          if ((e.key === 'n' || e.key === 'N') && !e.ctrlKey && !e.metaKey && !e.altKey && !digitando(e.target) &&
+              window.__r2NBusca === 'bdv' && LST.length) {
+            e.preventDefault(); e.stopImmediatePropagation(); foco(IX + (e.shiftKey ? -1 : 1)); return;
+          }
+          if (e.key === 'Escape' && !digitando(e.target) && window.__r2NBusca) { window.__r2NBusca = null; return; }
+          // Ctrl/⌘+F com o mouse na placa: vai para a busca da placa
+          if (!(e.key === 'f' || e.key === 'F') || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+          var a = document.activeElement;
+          if (a && a.classList && a.classList.contains('pdf-search-input')) return;   // está no PDF: segue a busca do PDF
+          if (!NA_PLACA || !INP) return;
+          e.preventDefault(); e.stopImmediatePropagation();
+          var u = U(), t = u && u.activeTab, sel = t && t.selection, b = t && t.board;
+          if (b && sel && sel.partIndex != null && b.parts[sel.partIndex]) INP.value = b.parts[sel.partIndex].name;
+          else if (sel && sel.highlightedNet) INP.value = sel.highlightedNet;
+          INP.focus(); INP.select(); if (INP.value) busca(INP.value);
+        }, true);
+        // PDF: Enter busca e tira o cursor do campo; N anda pelas ocorrências (sem digitar «n» na busca)
+        document.addEventListener('keydown', function (e) {
+          var t = e.target;
+          if (!t || !t.classList || !t.classList.contains('pdf-search-input')) return;
+          if (e.key === 'Enter' && t.value.trim()) setTimeout(function () { window.__r2NBusca = 'pdf'; try { t.blur(); } catch (x) {} }, 0);
+          else if (e.key !== 'Enter' && e.key !== 'Shift') window.__r2NBusca = null;
+        }, true);
+      })();
+    </script>
+    <!-- 2R 27/10/2026 (Roger: «a lentidão ainda persiste no Win»): medidor de desempenho da página. Os travadas.txt do
+         PC não mostram o Python travado durante o uso → a demora está no desenho da página. Anota em
+         Documentos/2R Tools/Logs/desempenho_web.txt: a placa de vídeo que o navegador usa (se for «SwiftShader» /
+         «Software», está desenhando sem a placa de vídeo — muito lento) e, a cada minuto, os travamentos da página
+         (tarefas > 200 ms), quadros por segundo e memória. -->
+    <script>
+      (function () {
+        'use strict';
+        function log(t) { try { if (window.__2rPerfLog) window.__2rPerfLog(t); } catch (e) {} }
+        function gpu() {
+          try {
+            var c = document.createElement('canvas'), gl = c.getContext('webgl2') || c.getContext('webgl');
+            if (!gl) return 'sem WebGL';
+            var d = gl.getExtension('WEBGL_debug_renderer_info');
+            return (d ? gl.getParameter(d.UNMASKED_VENDOR_WEBGL) + ' | ' + gl.getParameter(d.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) +
+              (gl instanceof (window.WebGL2RenderingContext || function () {}) ? ' · WebGL2' : ' · WebGL1');
+          } catch (e) { return 'erro: ' + e; }
+        }
+        setTimeout(function () {
+          var g = gpu(), sw = /swiftshader|software|llvmpipe|basic render|microsoft basic/i.test(g);
+          log('INÍCIO · ' + navigator.userAgent.replace(/.*(Chrome\/\S+).*/, '$1') + ' · placa de vídeo: ' + g + (sw ? '  ⚠ SEM ACELERAÇÃO (desenho por software)' : '') +
+              ' · tela ' + screen.width + '×' + screen.height + ' · escala ' + window.devicePixelRatio + ' · núcleos ' + (navigator.hardwareConcurrency || '?'));
+        }, 4000);
+        var lt = { n: 0, ms: 0, pior: 0 };
+        try {
+          new PerformanceObserver(function (l) { l.getEntries().forEach(function (e) { if (e.duration >= 200) { lt.n++; lt.ms += e.duration; lt.pior = Math.max(lt.pior, e.duration); } }); })
+            .observe({ entryTypes: ['longtask'] });
+        } catch (e) {}
+        var fr = 0, t0 = performance.now();
+        (function q() { fr++; requestAnimationFrame(q); })();
+        setInterval(function () {
+          var s = (performance.now() - t0) / 1000, fps = fr / s; fr = 0; t0 = performance.now();
+          var mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : '?';
+          if (lt.n || fps < 30) {
+            var U = window.__2rBoardGet && window.__2rBoardGet(), b = U && U.activeTab && U.activeTab.board;
+            log('MINUTO · travamentos ' + lt.n + ' (total ' + Math.round(lt.ms) + ' ms, pior ' + Math.round(lt.pior) + ' ms) · ' + Math.round(fps) + ' quadros/s · memória ' + mem +
+                ' · placa ' + (b ? (U.activeTab.fileName || '') + ' (' + b.parts.length + ' peças)' : 'nenhuma') + ' · ' + (document.hidden ? 'janela escondida' : 'janela visível'));
+          }
+          lt = { n: 0, ms: 0, pior: 0 };
+        }, 60000);
+      })();
+    </script>
+    <!-- 2R 27/10/2026 (Roger: «no Ripper, add dois ícones escrito TOP e BOTTOM e pôr o contorno da mesma cor que sua
+         net correspondente… é uma guia, deixar o neon aceso quando estiver na face correspondente»; escolha: contorno na
+         cor do lado). Ficam em cima da placa, no canto direito; clique mostra aquele lado. Cor de cada lado: a dos pinos
+         daquele lado nos Ajustes, se forem diferentes; senão TOP dourado e BOTTOM azul. -->
+    <style>
+      /* 27/10/2026 (Roger: «o botão top e bottom está em cima de outro ícone, faltou add o butterfly»): sai de cima do botão do painel lateral (canto direito, 46 px) e ganha o BUTTERFLY */
+      #r2tb { position:absolute; top:7px; right:56px; z-index:30; display:flex; gap:8px; font:800 12px Inter,-apple-system,"Segoe UI",sans-serif; letter-spacing:.08em; }
+      #r2tb button { background:rgba(20,21,24,.9); color:#9aa0a8; border:2px solid var(--c); border-radius:8px; padding:5px 12px; cursor:pointer;
+                     opacity:.55; transition:box-shadow .15s, opacity .15s, color .15s; font:inherit; }
+      #r2tb button.on { opacity:1; color:var(--c); box-shadow:0 0 6px var(--c), 0 0 14px var(--c), inset 0 0 6px var(--c); text-shadow:0 0 6px var(--c); }
+      #r2tb button:hover { opacity:1; }
+      /* 27/10/2026 (Roger: «subir o mapa o máximo para cima, alinhado com os outros botões»): mapa no topo, na mesma altura da busca e do TOP/BOTTOM/BUTTERFLY */
+      .board-minimap, .board-minimap.visible { top:7px !important; left:calc((100% - var(--r2sbw, 0px)) / 2) !important; }
+      /* 27/10/2026 (Roger: «não é o tamanho, e sim estar visível ou minimizado; clica na seta e expande o mapa para o tamanho padrão») */
+      .board-minimap .r2-mapa-min { position:absolute; top:3px; right:3px; z-index:2; width:18px; height:18px; padding:0; border:0; border-radius:4px;
+              background:rgba(20,21,24,.78); color:#cfd3d9; font-size:11px; line-height:18px; cursor:pointer; }
+      .board-minimap .r2-mapa-min:hover { color:#fff; }
+      .board-minimap .r2-mapa-chip { display:flex; align-items:center; gap:6px; padding:5px 10px; border:0; background:transparent; color:var(--text-primary,#e8e8e8);
+              font:600 12px Inter,-apple-system,"Segoe UI",sans-serif; cursor:pointer; }
+      .board-minimap .r2-mapa-seta { color:#D4B26A; font-size:12px; }
+      /* 27/10/2026 09h19 (Roger: fundo de mesa cinza-claro — «o mapa tem que ficar visível»): mapa e card «Mapa ▾» com fundo escuro opaco e borda */
+      .board-minimap { background:#1E1E1C !important; border:1px solid rgba(0,0,0,.45) !important; box-shadow:0 2px 10px rgba(0,0,0,.35) !important; }
+    </style>
+    <script>
+      (function () {
+        'use strict';
+        var BOX = null;
+        function U() { return window.__2rBoardGet && window.__2rBoardGet(); }
+        function cont() { var R = window.__2rRend; return R && R.containerEl && R.containerEl.isConnected ? R.containerEl : null; }
+        function cores() {
+          var top = '#D4B26A', bot = '#5FB4FF';
+          try {
+            var st = JSON.parse(localStorage.getItem('boardripper-render-settings') || '{}');
+            var t = st.defaultPinColorTop, b = st.defaultPinColorBottom;
+            if (t && b && String(t).toLowerCase() !== String(b).toLowerCase()) { top = t; bot = b; }
+          } catch (e) {}
+          return { top: top, bot: bot };
+        }
+        function monta() {
+          var c = cont(); if (!c) return null;
+          if (BOX && BOX.parentNode === c) return BOX;
+          if (getComputedStyle(c).position === 'static') c.style.position = 'relative';
+          BOX = document.createElement('div'); BOX.id = 'r2tb';
+          BOX.innerHTML = '<button data-l="top" title="Mostrar o lado de cima (TOP)">TOP</button><button data-l="bottom" title="Mostrar o lado de baixo (BOTTOM)">BOTTOM</button><button data-l="bf" title="Butterfly: os dois lados lado a lado">BUTTERFLY</button>';
+          ['pointerdown', 'mousedown', 'wheel', 'dblclick'].forEach(function (ev) { BOX.addEventListener(ev, function (e) { e.stopPropagation(); }); });
+          BOX.querySelectorAll('button').forEach(function (b) {
+            b.onclick = function (e) {
+              e.stopPropagation();
+              var u = U(), t = u && u.activeTab; if (!t || !t.board) return;
+              if (b.dataset.l === 'bf') { try { if (!t.butterfly) u.toggleButterfly(); } catch (x) {} pinta(); return; }
+              var top = b.dataset.l === 'top';
+              try { if (t.butterfly) u.toggleButterfly(); u.updateActiveTab({ showTop: top, showBottom: !top, butterfly: false }); u.notify(); } catch (x) {}
+              pinta();
+            };
+          });
+          c.appendChild(BOX);
+          return BOX;
+        }
+        var ult = '';
+        function aba() {   // 27/10/2026: aba direita aberta (300 px por cima da placa) → TOP/BOTTOM/BUTTERFLY e o mapa se afastam dela
+          var c = cont(), r = c, sb = null;
+          for (var k = 0; k < 4 && r && !sb; k++) { sb = r.querySelector && r.querySelector('.board-sidebar'); r = r.parentElement; }
+          var w = sb && sb.offsetWidth ? sb.offsetWidth : 0;
+          // 27/10/2026 22h (Roger: «quando abro a aba de informação do componente, os ícones butterfly encavalam»):
+          // mede onde a aba realmente está (não só a largura) e, se TOP/BOTTOM/BUTTERFLY baterem no mapa ou na busca,
+          // descem para logo abaixo deles em vez de ficar por cima.
+          if (c && sb && sb.offsetWidth) {
+            var cr = c.getBoundingClientRect(), sr = sb.getBoundingClientRect();
+            if (sr.left < cr.right && sr.right > cr.left) w = Math.max(w, Math.round(cr.right - sr.left));
+          }
+          document.documentElement.style.setProperty('--r2sbw', w + 'px');
+          if (!BOX || !c) return;
+          BOX.style.right = (w ? w + 10 : 56) + 'px';
+          BOX.style.top = '7px';
+          // 27/10/2026 22h15 (print do Roger, Mac e Windows): o painel da direita (Informações, olho, lupa…) é outro
+          // painel, fora da placa — o BUTTERFLY ficava em cima do 1º ícone dele. Confere o que está DE FATO sob os
+          // botões e, se for algo fora da placa, recua até ficar livre.
+          for (var volta = 0; volta < 4; volta++) {
+            var br = BOX.getBoundingClientRect(); if (!br.width) return;
+            var my = br.top + br.height / 2, bate = null;
+            [br.right - 2, br.left + br.width * 0.66, br.left + br.width * 0.33, br.left + 2].some(function (x) {
+              var pilha = document.elementsFromPoint(x, my) || [];
+              for (var q = 0; q < pilha.length; q++) {
+                var el = pilha[q];
+                if (el === BOX || BOX.contains(el)) continue;
+                if (!c.contains(el) && !el.contains(c)) { bate = el; return true; }
+                return false;                                     // embaixo é a placa: livre neste ponto
+              }
+              return false;
+            });
+            if (!bate) break;
+            var er2 = bate.getBoundingClientRect();
+            var cr2 = c.getBoundingClientRect();
+            var limite = Math.min(er2.left, br.right) - 10;      // a borda direita dos botões fica antes do que bate
+            var novo = Math.round(cr2.right - limite);
+            if (!(novo > parseFloat(BOX.style.right || '0'))) break;
+            BOX.style.right = novo + 'px';
+          }
+          br = BOX.getBoundingClientRect();
+          var base = c.getBoundingClientRect().top, desce = 0;
+          c.querySelectorAll('.board-minimap, [class*="search-wrapper"], [class*="board-search"]').forEach(function (el) {
+            if (el === BOX || BOX.contains(el) || el.contains(BOX) || !el.offsetWidth) return;
+            var er = el.getBoundingClientRect();
+            if (er.top > br.bottom + 2 || er.bottom < br.top) return;            // outra altura: não bate
+            if (er.left < br.right + 6 && er.right > br.left - 6) desce = Math.max(desce, er.bottom - base + 6);
+          });
+          if (desce) BOX.style.top = Math.round(desce) + 'px';
+        }
+        function pinta() {
+          var bx = monta(); if (!bx) return;
+          aba();
+          var u = U(), t = u && u.activeTab;
+          bx.style.display = t && t.board ? '' : 'none';
+          if (!t || !t.board) return;
+          var k = cores(), bf = !!t.butterfly, chave = [t.showTop, t.showBottom, bf, k.top, k.bot].join('|');
+          if (chave === ult) return; ult = chave;
+          var bt = bx.querySelector('[data-l="top"]'), bb = bx.querySelector('[data-l="bottom"]'), bu = bx.querySelector('[data-l="bf"]');
+          bt.style.setProperty('--c', k.top); bb.style.setProperty('--c', k.bot); bu.style.setProperty('--c', '#E6E8EB');
+          bt.classList.toggle('on', !bf && !!t.showTop); bb.classList.toggle('on', !bf && !!t.showBottom); bu.classList.toggle('on', bf);
+        }
+        setInterval(pinta, 400);
+      })();
+    </script>
+</body>
+</html>

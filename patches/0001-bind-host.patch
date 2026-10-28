@@ -1,0 +1,23 @@
+diff --git a/src/backend/main.go b/src/backend/main.go
+index a98f9ec..494d40a 100644
+--- a/src/backend/main.go
++++ b/src/backend/main.go
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"log"
++	"net"
+ 	"net/http"
+ 	"os"
+ 	"os/signal"
+@@ -595,6 +596,10 @@ func main() {
+ 	log.Printf("Library scan root: %s", scanner.ScanRoot())
+ 
+ 	addr := fmt.Sprintf(":%s", port)
++	// 2R Tools: BIND_HOST=127.0.0.1 keeps the embedded server off the LAN.
++	if host := os.Getenv("BIND_HOST"); host != "" {
++		addr = net.JoinHostPort(host, port)
++	}
+ 	// Middleware order (outer → inner):
+ 	//   securityHeaders → CSRF check → gzip → mux
+ 	// CSRF check has to see the request before mux dispatches; gzip wraps

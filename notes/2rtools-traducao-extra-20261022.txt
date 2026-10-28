@@ -1,0 +1,16 @@
+Ao atualizar o BoardRipper, reaplicar no index-*.js:
+  const XV=ID()==="es"?{...UV,...WV}:ID()==="en"?VV:HV
+→ const XV=ID()==="es"?{...UV,...WV,...(window.__2rTrEs||{})}:ID()==="en"?{...VV,...(window.__2rTrEn||{})}:HV
+O app injeta window.__2rTrEn / window.__2rTrEs (data/ui/boardripper_tr.json) em ui/boardview_view.py.
+
+# 22/10/2026 — roda do mouse no PDF (Windows com escala da tela)
+No index-*.js, na roda do PDF, trocar:
+  tp=nt.deltaX!==0||nt.deltaY%1!==0||(w!==void 0&&w!==0&&w===-3*nt.deltaY&&w%120!==0)
+por:
+  tp=nt.deltaX!==0||(w!==void 0&&w!==0?(w%120!==0&&(nt.deltaY%1!==0||w===-3*nt.deltaY)):nt.deltaY%1!==0)
+(roda = wheelDeltaY múltiplo de 120; no Windows com escala o deltaY vem quebrado e era tomado por trackpad)
+
+# 22/10/2026 — roda do mouse dá zoom na PLACA (Mac e Windows)
+No index-*.js, na roda da placa, trocar:
+  else if(t.wheelDetection&&t.twoFingerPan&&bO(e))n="zoom";
+por um teste da roda (wheelDeltaY múltiplo de 120, sem giro lateral, sem trackpad nos últimos 400 ms) OU o bO original.

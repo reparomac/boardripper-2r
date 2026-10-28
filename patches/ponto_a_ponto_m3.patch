@@ -1,0 +1,2527 @@
+diff --git a/src/backend/main.go b/src/backend/main.go
+index 2141cff..9f68f48 100644
+--- a/src/backend/main.go
++++ b/src/backend/main.go
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"log"
++	"net"
+ 	"net/http"
+ 	"os"
+ 	"os/signal"
+@@ -602,6 +603,10 @@ func main() {
+ 	log.Printf("Library scan root: %s", scanner.ScanRoot())
+ 
+ 	addr := fmt.Sprintf(":%s", port)
++	// 2R Tools: BIND_HOST=127.0.0.1 keeps the embedded server off the LAN.
++	if host := os.Getenv("BIND_HOST"); host != "" {
++		addr = net.JoinHostPort(host, port)
++	}
+ 	// Middleware order (outer → inner):
+ 	//   securityHeaders → CSRF check → gzip → mux
+ 	// CSRF check has to see the request before mux dispatches; gzip wraps
+diff --git a/src/frontend/src/App.tsx b/src/frontend/src/App.tsx
+index 04e425f..3345ef8 100644
+--- a/src/frontend/src/App.tsx
++++ b/src/frontend/src/App.tsx
+@@ -16,11 +16,18 @@ import { Sidebar } from './components/Sidebar';
+ import { cycleSidebar, showSidebarTab } from './components/Sidebar.utils';
+ import { useSidebarState } from './hooks/useSidebarState';
+ import { ActivityRail } from './components/ActivityRail';
++import { CameraOverlay } from './components/CameraOverlay';
++import { GuideHud } from './components/GuideHud';
++import { SettingsWindow2R } from './components/SettingsWindow2R';
++import { TrackpadPrefs2R } from './components/TrackpadPrefs2R';
++import { PartFilter2R } from './components/PartFilter2R';
++
+ import { PanelErrorBoundary } from './components/PanelErrorBoundary';
+ import { BoardViewerPanel } from './panels/BoardViewerPanel';
+ import { PdfViewerPanel } from './panels/PdfViewerPanel';
+ import { DatabaseEditorPanel } from './panels/DatabaseEditorPanel';
+ import { WorklistPanel } from './panels/WorklistPanel';
++import { MicroscopePanel } from './panels/MicroscopePanel';
+ import { BoardTab } from './components/BoardTab';
+ import { PdfTab } from './components/PdfTab';
+ import { HomeBackdrop } from './components/home/HomeBackdrop';
+@@ -72,6 +79,11 @@ const components: Record<string, React.FC<IDockviewPanelProps>> = {
+       <WorklistPanel />
+     </PanelErrorBoundary>
+   ),
++  microscope: () => (
++    <PanelErrorBoundary label="Microscópio">
++      <MicroscopePanel />
++    </PanelErrorBoundary>
++  ),
+ };
+ 
+ const tabComponents = {
+@@ -335,6 +347,7 @@ function App() {
+       onDragOver={handleDragOver}
+       onDrop={handleDrop}
+     >
++      {/* 2R Tools: menu de texto no alto (padrão FlexBV) */}
+       <Toolbar />
+       {/* Body row: [rail] [dockview area over status bar]. The rail sits
+           OUTSIDE the dockview wrapper so it spans the status bar's row too —
+@@ -377,6 +390,13 @@ function App() {
+                   moment the new tab mounts and builds — the block it exists
+                   to explain. */}
+               <BackgroundLoadBanner />
++              {/* Sobreposição da câmera do microscópio sobre a placa (2R Tools) */}
++              <CameraOverlay />
++              {/* legenda das cores das nets (2R Tools): agora no pé do painel lateral (Sidebar) */}
++              <GuideHud />
++              <SettingsWindow2R />
++              <TrackpadPrefs2R />
++              <PartFilter2R />
+             </div>
+           </div>
+           {!statusBarHidden && <StatusBar />}
+diff --git a/src/frontend/src/components/BoardSidebar.tsx b/src/frontend/src/components/BoardSidebar.tsx
+index 4fdfbec..85a77bb 100644
+--- a/src/frontend/src/components/BoardSidebar.tsx
++++ b/src/frontend/src/components/BoardSidebar.tsx
+@@ -22,6 +22,9 @@ import { boardKnowledge } from '../store/board-knowledge';
+ import { bomReasonLabel, type BoardData, type Part } from '../parsers';
+ import { pinDisplayId } from '../parsers/types';
+ import { setActiveSearchInput, getActiveSearchInput } from './BoardSidebar.utils';
++import { looseMatch } from '../r2/loose-match';
++import { IS_2R } from '../r2/env';
++import { mirrorToPdf, searchSyncOn } from '../r2/search-sync';
+ 
+ type SidebarTab = 'layers' | 'info' | 'search' | 'revisions' | 'worklist' | 'notes';
+ 
+@@ -1113,11 +1116,11 @@ function SearchTab({ tabId }: { tabId: number }) {
+   // Compute filtered results (show all when no query)
+   const ql = query.toLowerCase();
+   const matchedParts = useMemo(
+-    () => ql ? sortedParts.filter(p => p.name.toLowerCase().includes(ql)) : sortedParts,
++    () => ql ? sortedParts.filter(p => looseMatch(p.name, ql)) : sortedParts,
+     [sortedParts, ql],
+   );
+   const matchedNets = useMemo(
+-    () => ql ? sortedNets.filter(([name]) => name.toLowerCase().includes(ql)) : sortedNets,
++    () => ql ? sortedNets.filter(([name]) => looseMatch(name, ql)) : sortedNets,
+     [sortedNets, ql],
+   );
+ 
+@@ -1148,20 +1151,24 @@ function SearchTab({ tabId }: { tabId: number }) {
+     }
+     const items: { label: string; type: 'component' | 'net' | 'recent' }[] = [];
+     for (const name of allParts) {
+-      if (name.toLowerCase().includes(ql)) items.push({ label: name, type: 'component' });
++      if (looseMatch(name, ql)) items.push({ label: name, type: 'component' });
+       if (items.length >= 8) return items;
+     }
+     for (const name of allNets) {
+-      if (name.toLowerCase().includes(ql)) items.push({ label: name, type: 'net' });
++      if (looseMatch(name, ql)) items.push({ label: name, type: 'net' });
+       if (items.length >= 8) return items;
+     }
+     return items;
+   }, [ql, allParts, allNets, navListed]);
+ 
+   // Sync toolbar search with local query
++  const mirrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+   const onQueryChange = useCallback((value: string) => {
+     setQuery(value);
+     boardStore.setSearch(value);
++    // 2R: busca junto no PDF aberto (Roger, 11/10/2026)
++    if (mirrorTimer.current) clearTimeout(mirrorTimer.current);
++    mirrorTimer.current = setTimeout(() => mirrorToPdf(value), 600);
+   }, []);
+ 
+   // Close suggestions on outside click
+@@ -1187,7 +1194,7 @@ function SearchTab({ tabId }: { tabId: number }) {
+           ref={inputRef}
+           type="text"
+           className="search-tab-input"
+-          placeholder="Search components or nets..."
++          placeholder={IS_2R ? (searchSyncOn() ? 'Buscar na placa (e junto no PDF)…' : 'Buscar na placa: componente ou net…') : 'Search components or nets...'}
+           value={query}
+           onChange={(e) => { onQueryChange(e.target.value); setShowSuggestions(true); }}
+           onFocus={() => setShowSuggestions(true)}
+diff --git a/src/frontend/src/components/ComponentInfoBody.tsx b/src/frontend/src/components/ComponentInfoBody.tsx
+index 84c89fb..4085cd5 100644
+--- a/src/frontend/src/components/ComponentInfoBody.tsx
++++ b/src/frontend/src/components/ComponentInfoBody.tsx
+@@ -76,6 +76,10 @@ export function ComponentInfoBody({
+    *  NetBranchSection, because the caret that drives it is now part of the
+    *  selected pin row's net cell. */
+   const [collapsedNet, setCollapsedNet] = useState<string | null>(null);
++  // 2R Tools (FlexBV): filtro e ordenação da tabela de pinos — ajuda a achar
++  // uma net/pino dentro de um CI grande (ex.: CD3217, linhas de LDO).
++  const [pinFilter, setPinFilter] = useState('');
++  const [pinSort, setPinSort] = useState<{ col: 'num' | 'name' | 'net'; dir: 1 | -1 } | null>(null);
+ 
+   // Auto-load matches + cached data when the active board changes. Cheap:
+   // hits the backend's match endpoint once per board, and the per-bpath
+@@ -158,6 +162,37 @@ export function ComponentInfoBody({
+ 
+   /** Pin-table column count — the inline net row spans all of it. */
+   const pinColumns = 3 + (board.diodeReference ? 1 : 0) + (obd.hasData ? 1 : 0);
++  // Ordem/visibilidade das linhas de pino: iteramos por ÍNDICE ORIGINAL, então
++  // seleção, net-branch e eco continuam corretos mesmo com filtro/ordenação.
++  const pinOrder: number[] = (() => {
++    const order = selectedPart.pins.map((_, i) => i);
++    const q = pinFilter.trim().toLowerCase();
++    const filtered = q
++      ? order.filter((i) => {
++          const pp = selectedPart.pins[i];
++          return String(pp.number ?? '').toLowerCase().includes(q)
++            || (pp.name ?? '').toLowerCase().includes(q)
++            || (pp.net ?? '').toLowerCase().includes(q);
++        })
++      : order;
++    if (!pinSort) return filtered;
++    const { col, dir } = pinSort;
++    return [...filtered].sort((a, b) => {
++      const pa = selectedPart.pins[a], pb = selectedPart.pins[b];
++      const va = col === 'num' ? pa.number : col === 'name' ? (pa.name ?? '') : (pa.net ?? '');
++      const vb = col === 'num' ? pb.number : col === 'name' ? (pb.name ?? '') : (pb.net ?? '');
++      return String(va).localeCompare(String(vb), undefined, { numeric: true }) * dir;
++    });
++  })();
++  const togglePinSort = (col: 'num' | 'name' | 'net') =>
++    setPinSort((cur) =>
++      cur && cur.col === col
++        ? cur.dir === 1
++          ? { col, dir: -1 as const }
++          : null
++        : { col, dir: 1 as const });
++  const pinSortArrow = (col: 'num' | 'name' | 'net') =>
++    pinSort?.col === col ? (pinSort.dir === 1 ? ' ▲' : ' ▼') : '';
+ 
+   const meta = selectedPart.meta;
+   const metaRows: Array<[string, string]> = [];
+@@ -215,19 +250,29 @@ export function ComponentInfoBody({
+         />
+       )}
+ 
++      <div className="pin-filter-row">
++        <input
++          type="text"
++          className="pin-filter-input"
++          value={pinFilter}
++          onChange={(e) => setPinFilter(e.target.value)}
++          placeholder="Filtrar pinos (nome, net, nº)…"
++        />
++      </div>
+       <div className="pin-table-container">
+         <table className="pin-table">
+           <thead>
+             <tr>
+-              <th>#</th>
+-              <th>Name</th>
+-              <th>Net</th>
++              <th className="pin-th-sort" onClick={() => togglePinSort('num')} title="Ordenar por número">{`#${pinSortArrow('num')}`}</th>
++              <th className="pin-th-sort" onClick={() => togglePinSort('name')} title="Ordenar por nome">{`Name${pinSortArrow('name')}`}</th>
++              <th className="pin-th-sort" onClick={() => togglePinSort('net')} title="Ordenar por net">{`Net${pinSortArrow('net')}`}</th>
+               {board.diodeReference && <th title="diode-mode reference reading baked into the board file (volts)">Diode</th>}
+               {obd.hasData && <th title="diode / V / Ω from OpenBoardData">OBD</th>}
+             </tr>
+           </thead>
+           <tbody>
+-            {selectedPart.pins.map((pin, idx) => {
++            {pinOrder.map((idx) => {
++              const pin = selectedPart.pins[idx];
+               const isSelected = selection.pinIndex === idx;
+               const isNetHighlighted = selection.highlightedNet === pin.net && pin.net !== '';
+               const obdNets = obd.hasData ? obd.lookup(pin.net) : [];
+diff --git a/src/frontend/src/components/DiagnosisNotes.tsx b/src/frontend/src/components/DiagnosisNotes.tsx
+index dadf401..3287da1 100644
+--- a/src/frontend/src/components/DiagnosisNotes.tsx
++++ b/src/frontend/src/components/DiagnosisNotes.tsx
+@@ -43,10 +43,10 @@ function DiagnosisSectionView({ section, board }: { section: ObdSection; board:
+     <details
+       data-testid="obd-section-spoiler"
+       style={{
+-        border: '1px solid #333',
++        border: '1px solid var(--r2-line, #333)',
+         borderRadius: 4,
+         marginBottom: 4,
+-        background: '#1a1a1a',
++        background: 'var(--r2-bg2, #1a1a1a)',
+       }}
+     >
+       <summary
+@@ -55,7 +55,7 @@ function DiagnosisSectionView({ section, board }: { section: ObdSection; board:
+           fontSize: 12,
+           fontWeight: 600,
+           cursor: 'pointer',
+-          background: '#222',
++          background: 'var(--r2-bg2, #222)',
+           borderRadius: 4,
+         }}
+       >
+@@ -84,7 +84,7 @@ function DiagnosisNoteView({ note, board }: { note: ObdNote; board: BoardData |
+           fontSize: 11,
+           lineHeight: 1.5,
+           padding: '4px 8px',
+-          background: '#101010',
++          background: 'var(--r2-bg0, #101010)',
+           borderRadius: 3,
+           marginTop: 2,
+           fontFamily: 'monospace',
+diff --git a/src/frontend/src/components/Sidebar.tsx b/src/frontend/src/components/Sidebar.tsx
+index 75d1148..11b5581 100644
+--- a/src/frontend/src/components/Sidebar.tsx
++++ b/src/frontend/src/components/Sidebar.tsx
+@@ -6,6 +6,10 @@ import { ToolsPanel } from '../panels/ToolsPanel';
+ import { HistoryPanel } from '../panels/HistoryPanel';
+ import { PanelErrorBoundary } from './PanelErrorBoundary';
+ import { DebugPanel } from '../panels/DebugPanel';
++import { AcervoPanel } from '../panels/AcervoPanel';
++import { MeterPanel } from '../panels/MeterPanel';
++import { CurvesPanel } from '../panels/CurvesPanel';
++import { GuidePanel } from '../panels/GuidePanel';
+ import {
+   MIN_WIDTH,
+   MAX_WIDTH_RATIO,
+@@ -20,6 +24,8 @@ import {
+   hideSidebar,
+ } from './Sidebar.utils';
+ import { useSidebarState } from '../hooks/useSidebarState';
++import { NetLegend } from './NetLegend';
++import { IS_2R } from '../r2/env';
+ 
+ export function Sidebar() {
+   const { side, collapsed, activeTab, rail, autoHide } = useSidebarState();
+@@ -190,6 +196,26 @@ export function Sidebar() {
+             preserves React state (scroll, expanded folders, search query)
+             across tab switches. The panel that's not active just renders
+             with display:none and contributes no layout. */}
++        <div style={{ display: activeTab === 'meter' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
++          <PanelErrorBoundary label="Medições">
++            <MeterPanel />
++          </PanelErrorBoundary>
++        </div>
++        <div style={{ display: activeTab === 'guide' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
++          <PanelErrorBoundary label="Sequência de start">
++            <GuidePanel />
++          </PanelErrorBoundary>
++        </div>
++        <div style={{ display: activeTab === 'curves' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
++          <PanelErrorBoundary label="Curvas">
++            <CurvesPanel />
++          </PanelErrorBoundary>
++        </div>
++        <div style={{ display: activeTab === 'acervo' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
++          <PanelErrorBoundary label="Acervo 2R">
++            <AcervoPanel />
++          </PanelErrorBoundary>
++        </div>
+         <div style={{ display: activeTab === 'library' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+           <LibraryPanel />
+         </div>
+@@ -210,6 +236,10 @@ export function Sidebar() {
+           <DebugPanel />
+         </div>
+       </div>
++      {/* 2R Tools (Roger, 10/10/2026): «mover o painel de cores para dentro do card ao lado
++          esquerdo» — a legenda das nets fica no pé do painel lateral, em qualquer aba,
++          e não mais por cima da placa. Minimiza para baixo. */}
++      {IS_2R && <div className="r2-legend-sidebar"><NetLegend embedded /></div>}
+       <div
+         className="sidebar-resize-handle"
+         style={isLeft ? { right: -3 } : { left: -3 }}
+diff --git a/src/frontend/src/components/Sidebar.utils.ts b/src/frontend/src/components/Sidebar.utils.ts
+index 596d6f2..5e79e6d 100644
+--- a/src/frontend/src/components/Sidebar.utils.ts
++++ b/src/frontend/src/components/Sidebar.utils.ts
+@@ -16,7 +16,8 @@
+  * Refresh can only HMR a file whose only exports are React components.
+  */
+ 
+-import { IconBooks, IconHistory, IconCalculator, IconBug, IconSettings } from '@tabler/icons-react';
++import { IconBooks, IconHistory, IconCalculator, IconBug, IconSettings, IconCloud, IconGauge, IconWaveSine, IconRoute } from '@tabler/icons-react';
++import { IS_2R, beta } from '../r2/env';
+ import type { Icon } from '@tabler/icons-react';
+ import { isLiteBuild } from '../store/build-mode';
+ 
+@@ -34,7 +35,7 @@ export const MIN_WIDTH = 200;
+ export const MAX_WIDTH_RATIO = 0.5; // never wider than half the screen
+ 
+ export type SidebarSide = 'left' | 'right';
+-export type SidebarTab = 'library' | 'history' | 'tools' | 'settings' | 'debug';
++export type SidebarTab = 'acervo' | 'meter' | 'curves' | 'guide' | 'library' | 'history' | 'tools' | 'settings' | 'debug';
+ export type SidebarStage = 'open' | 'icons' | 'hidden';
+ 
+ export interface SidebarTabDef {
+@@ -50,12 +51,17 @@ export interface SidebarTabDef {
+  *  server-backed library, but it does have the local-folder one
+  *  (`store/folder-library.ts`), which fills the same panel. */
+ export const TABS: readonly SidebarTabDef[] = [
+-  { id: 'library',  label: 'Library',  icon: IconBooks,      group: 'top' },
+-  { id: 'history',  label: 'History',  icon: IconHistory,    group: 'top' },
+-  { id: 'tools',    label: 'Tools',    icon: IconCalculator, group: 'top' },
+-  { id: 'debug',    label: 'Debug',    icon: IconBug,        group: 'bottom' },
+-  { id: 'settings', label: 'Settings', icon: IconSettings,   group: 'bottom' },
+-] as SidebarTabDef[];
++  // 2R Tools: Acervo 2R (nuvem) — só aparece dentro do app 2R Tools
++  ...(IS_2R ? [{ id: 'acervo' as const, label: 'Acervo 2R', icon: IconCloud, group: 'top' as const },
++             ...(beta('medicoes') ? [{ id: 'meter' as const, label: 'Medições', icon: IconGauge, group: 'top' as const }] : []),
++             ...(beta('curvas') ? [{ id: 'curves' as const, label: 'Curvas β', icon: IconWaveSine, group: 'top' as const }] : []),
++             ...(beta('teleguiado') ? [{ id: 'guide' as const, label: 'Ponto a ponto', icon: IconRoute, group: 'top' as const }] : [])] : []),
++  { id: 'library',  label: IS_2R ? 'Local' : 'Library',  icon: IconBooks,      group: 'top' },
++  { id: 'history',  label: IS_2R ? 'Histórico' : 'History',  icon: IconHistory,    group: 'top' },
++  { id: 'tools',    label: IS_2R ? 'Ferramentas' : 'Tools',    icon: IconCalculator, group: 'top' },
++  { id: 'debug',    label: IS_2R ? 'Diagnóstico' : 'Debug',    icon: IconBug,        group: 'bottom' },
++  { id: 'settings', label: IS_2R ? 'Ajustes' : 'Settings', icon: IconSettings,   group: 'bottom' },
++].filter(t => !(IS_2R && (t.id === 'tools' || t.id === 'debug' || t.id === 'settings'))) as SidebarTabDef[];   // 2R: Ajustes vão para Preferências (menu de cima)   // 2R: só o que o técnico usa
+ 
+ export const TAB_LABELS: Readonly<Record<SidebarTab, string>> = Object.fromEntries(
+   TABS.map(t => [t.id, t.label]),
+@@ -103,6 +109,11 @@ function coerceTab(tab: SidebarTab): SidebarTab {
+ }
+ 
+ function loadTab(): SidebarTab {
++  // 2R Tools: a aba do Acervo 2R (nuvem) é a padrão — vale na 1ª vez (10/10/2026)
++  if (IS_2R && readKey('2r-acervo-tab-default') !== '1') {
++    writeKey('2r-acervo-tab-default', '1');
++    return 'acervo';
++  }
+   const v = readKey(SIDEBAR_TAB_KEY);
+   return coerceTab(TABS.find(t => t.id === v)?.id ?? 'library');
+ }
+@@ -226,6 +237,8 @@ export function cycleSidebar(): void {
+ }
+ 
+ export function showSidebarTab(tab: SidebarTab): void {
++  // 2R: Ajustes saíram da lateral — abrem na janela do menu Preferências
++  if (IS_2R && tab === 'settings') { window.dispatchEvent(new CustomEvent('2r-settings-open', { detail: {} })); return; }
+   setActiveTabRaw(tab);
+   setStage('open');
+   emitSidebarChange();
+diff --git a/src/frontend/src/components/Toolbar.tsx b/src/frontend/src/components/Toolbar.tsx
+index 2db1bd0..8534aeb 100644
+--- a/src/frontend/src/components/Toolbar.tsx
++++ b/src/frontend/src/components/Toolbar.tsx
+@@ -2,6 +2,12 @@ import { useRef, useEffect, useState, useCallback, useLayoutEffect } from 'react
+ import { createPortal } from 'react-dom';
+ import { IconBoxMultiple, IconLayoutBoardSplit, IconUpload, IconDownload, IconInfoCircle } from '@tabler/icons-react';
+ import { boardStore } from '../store/board-store';
++import { IS_2R } from '../r2/env';
++import { MenuBar2R } from './MenuBar2R';
++import logo2r from '../assets/2r-logo.png';
++import { NavBar2R } from './NavBar2R';
++import { PinSearch } from './ScopedSearch2R';
++import { ThemeButton2R } from './ThemeButton2R';
+ import { useBoardStore } from '../hooks/useBoardStore';
+ import { useUpdateStore } from '../hooks/useUpdateStore';
+ import { showSidebarTab } from './Sidebar.utils';
+@@ -21,6 +27,7 @@ const COARSE_POINTER = typeof window !== 'undefined' && typeof window.matchMedia
+   && window.matchMedia('(pointer: coarse)').matches;
+ import { setLibrarySearch } from '../panels/LibraryPanel';
+ import { countInBoardTab, countInPdf, findInBoardTab, findInPdf } from '../store/cross-target-search';
++import { searchSyncOn, setSearchSync } from '../r2/search-sync';
+ import { SearchScopeBadge, type SearchScope } from './SearchScopeBadge';
+ import { isTwoWindowMode, toggleTwoWindowMode, onTwoWindowModeChange } from '../store/two-window-mode';
+ 
+@@ -323,7 +330,39 @@ function UpdateBadge({ update }: { update: ReturnType<typeof useUpdateStore> })
+ interface SearchResult { label: string; count: number; action: () => void; group: string }
+ 
+ /** Global search — searches board tabs, open PDFs, and library. Shows per-tab dropdown. */
+-function GlobalSearch() {
++export type Mode2R = 'all' | 'board' | 'pdf' | 'pin';
++const MODE_KEY = '2r-search-mode';
++function useMode2R(): [Mode2R, (m: Mode2R) => void] {
++  const [m, set] = useState<Mode2R>(() => { try { return (localStorage.getItem(MODE_KEY) as Mode2R) || 'all'; } catch { return 'all'; } });
++  return [m, (v: Mode2R) => { set(v); try { localStorage.setItem(MODE_KEY, v); } catch { /* */ } }];
++}
++const LUPA = <svg className="r2-search-ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>;
++
++/** 2R (aprovado pelo Roger, 11/10/2026): UMA busca, maior, com Tudo / Placa / PDF (e Pinos,
++ *  quando há um componente selecionado). Lembra a última escolha. */
++function Search2R() {
++  const [mode, setMode] = useMode2R();
++  const snap = useBoardStore();
++  const tab = snap.tabs.find(t => t.id === snap.activeTabId) ?? null;
++  const hasPart = (tab?.selection?.partIndex ?? null) !== null;
++  const opts: [Mode2R, string, string][] = [
++    ['all', 'Tudo', 'Placa e PDF juntos (Enter)'], ['board', 'Placa', 'Só na placa: componente ou net'],
++    ['pdf', 'PDF', 'Só no esquemático (PDF)'],
++  ];
++  if (hasPart) opts.push(['pin', 'Pinos', 'Pinos do componente selecionado']);
++  const seg = (
++    <div className="r2-seg" role="tablist">
++      {opts.map(([m, l, t]) => (
++        <button key={m} className={mode === m ? 'on' : ''} title={t} onMouseDown={e => e.preventDefault()}
++                onClick={() => { setMode(m); setTimeout(() => fileInputRefs.search?.focus(), 0); }}>{l}</button>
++      ))}
++    </div>
++  );
++  if (mode === 'pin' && hasPart) return <PinSearch seg={seg} />;
++  return <GlobalSearch mode={mode === 'pin' ? 'all' : mode} seg={seg} />;
++}
++
++function GlobalSearch({ mode = 'all', seg }: { mode?: Exclude<Mode2R, 'pin'>; seg?: React.ReactNode } = {}) {
+   const inputRef = useRef<HTMLInputElement>(null);
+   const wrapRef = useRef<HTMLDivElement>(null);
+   const [query, setQuery] = useState('');
+@@ -400,6 +439,18 @@ function GlobalSearch() {
+     setOpen(true);
+   }, []);
+ 
++  // 2R (Roger, 11/10/2026): Enter = procura na placa E no PDF de uma vez
++  const findBoth = useCallback((q: string) => {
++    const t = q.trim();
++    if (!t) return;
++    const tab = boardStore.activeTab ?? boardStore.tabs.find(x => x.board) ?? null;
++    if (tab?.board) findInBoardTab(t, tab.id);
++    const fn = pdfStore.activeFileName2R ?? pdfStore.loadedFileNames[0];
++    if (fn) setTimeout(() => findInPdf(t, fn), 30);
++    setOpen(false);
++  }, []);
++  const [sync, setSync] = useState(searchSyncOn());
++
+   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+     const v = e.target.value;
+     setQuery(v);
+@@ -407,23 +458,46 @@ function GlobalSearch() {
+     debounceRef.current = setTimeout(() => runSearch(v), 250);
+   };
+ 
+-  // Group results by category
+-  const groups = ['Board', 'PDF', 'Library'];
++  // Group results by category (2R: Placa / PDF mostram só o grupo deles)
++  const groups = mode === 'board' ? ['Board'] : mode === 'pdf' ? ['PDF'] : ['Board', 'PDF', 'Library'];
++  const enter2R = (q: string) => {
++    const t = q.trim(); if (!t) return;
++    if (mode === 'board') { const tb = boardStore.activeTab ?? boardStore.tabs.find(x => x.board) ?? null; if (tb?.board) findInBoardTab(t, tb.id); setOpen(false); return; }
++    if (mode === 'pdf') { const fn = pdfStore.activeFileName2R ?? pdfStore.loadedFileNames[0]; if (fn) findInPdf(t, fn); setOpen(false); return; }
++    findBoth(t);
++  };
++  const ph = !IS_2R ? 'Search parts, nets, PDFs, library'
++    : mode === 'board' ? 'Buscar componente ou net na placa…'
++    : mode === 'pdf' ? 'Buscar texto no esquemático (PDF)…'
++    : 'Buscar componente, net ou texto do PDF…';
+ 
+   return (
+-    <div className="toolbar-search-wrap" ref={wrapRef}>
++    <div className={'toolbar-search-wrap' + (IS_2R ? ' r2-search' : '')} ref={wrapRef}>
++      {IS_2R && LUPA}
+       <input
+         ref={inputRef}
+         type="text"
+-        placeholder="Search parts, nets, PDFs, library"
++        placeholder={ph}
+         className="toolbar-search"
+         value={query}
+         onChange={handleChange}
++        onKeyDown={e => { if (IS_2R && e.key === 'Enter') { e.preventDefault(); enter2R(query); } }}
+         onFocus={() => { if (query.trim()) runSearch(query); }}
+         data-testid="search-input"
+       />
+       {open && query.trim() && results.length > 0 && (
+         <div className="toolbar-search-dropdown">
++          {IS_2R && mode === 'all' && (
++            <button className="toolbar-search-option" onClick={() => findBoth(query)}>
++              <span>Placa + PDF juntos</span><span className="toolbar-search-count">Enter</span>
++            </button>
++          )}
++          {IS_2R && (
++            <label className="toolbar-search-option r2-sync-opt" onMouseDown={e => e.preventDefault()}>
++              <input type="checkbox" checked={sync} onChange={e => { setSync(e.target.checked); setSearchSync(e.target.checked); }} />
++              <span>Buscar junto: o que procurar na placa vai para o PDF, e vice-versa</span>
++            </label>
++          )}
+           {groups.map(group => {
+             const groupItems = results.filter(r => r.group === group);
+             if (groupItems.length === 0) return null;
+@@ -443,6 +517,7 @@ function GlobalSearch() {
+           })}
+         </div>
+       )}
++      {seg}
+     </div>
+   );
+ }
+@@ -578,25 +653,35 @@ export function Toolbar() {
+           mirror, butterfly and traces live in the board ribbon now — same
+           store actions, same shortcuts, only the button's home moved. ── */}
+       <SidebarCycleButton />
++      {/* 2R Tools: menus de texto na MESMA barra dos ícones (Roger, 10/10/2026: «a barra de
++          ícones pode subir para a mesma barra do menu… ganha espaço de visualização») */}
++      {IS_2R && <MenuBar2R inline />}
++      {/* 2R: «Abrir» fica no menu Arquivo (Ctrl+O) — sobra espaço para a busca (11/10/2026) */}
+       <button
+         onClick={handleFileOpen}
+         className="toolbar-btn toolbar-quiet"
++        style={IS_2R ? { display: 'none' } : undefined}
+         data-testid="open-btn"
+         data-tooltip={isElectron() ? 'Open boards or PDFs' : 'Open boards or PDFs from your device'}
+       >
+-        <IconUpload size={16} stroke={1.75} />Open
++        <IconUpload size={16} stroke={1.75} />{!IS_2R && 'Open'}
+       </button>
+ 
+-      {/* ── Search, centred ── */}
+-      <div className="toolbar-spacer" />
+-      <GlobalSearch />
++      {/* 2R Tools: uma barra só (padrão FlexBV) — as funções 2R entram aqui mesmo */}
++      {IS_2R && <NavBar2R inline />}
++
++      {/* ── Search, centred ── (2R: à direita, com escopo «Tudo / No componente») */}
+       <div className="toolbar-spacer" />
++      {IS_2R ? <Search2R /> : <GlobalSearch />}
++      {IS_2R && <ThemeButton2R />}
++      {!IS_2R && <div className="toolbar-spacer" />}
+ 
+       {/* Pop-out needs a real second window. The offline single file has no
+        *  popout.html to open, and a tablet's window.open is a new tab (iPadOS)
+        *  or nothing — so the control is hidden where it can only fail. Read
+        *  once at render: the pointer type does not change. */}
+-      {!isOfflineBuild() && !COARSE_POINTER && (
++      {/* 2R: «2 janelas» fica no menu Exibir — libera espaço p/ o logo e o tema. */}
++      {!IS_2R && !isOfflineBuild() && !COARSE_POINTER && (
+         <button
+           onClick={() => toggleTwoWindowMode()}
+           className={`toolbar-btn toolbar-quiet ${twoWindow ? 'active' : ''}`}
+@@ -608,9 +693,10 @@ export function Toolbar() {
+           {twoWindow
+             ? <IconBoxMultiple size={16} stroke={1.75} />
+             : <IconLayoutBoardSplit size={16} stroke={1.75} />}
+-          <span>2-Window</span>
++          {!IS_2R && <span>2-Window</span>}
+         </button>
+       )}
++      {IS_2R && <img className="r2-toolbar-logo" src={logo2r} alt="2R Tools" title="2R Tools" draggable={false} />}
+ 
+       {/* "Save as BVR3" was a permanently-disabled placeholder (export path
+           still has a side-inversion bug). Dead chrome trains users to ignore
+diff --git a/src/frontend/src/components/home/HomeBackdrop.tsx b/src/frontend/src/components/home/HomeBackdrop.tsx
+index 21862a0..e8e83f2 100644
+--- a/src/frontend/src/components/home/HomeBackdrop.tsx
++++ b/src/frontend/src/components/home/HomeBackdrop.tsx
+@@ -34,6 +34,8 @@ import { sessionRant } from './rants';
+ import { renderMarkdown } from './markdown';
+ import instructionsMd from './instructions.md?raw';
+ import { hdrTileUrl } from '../../renderer/hdr-selection-outline';
++import { IS_2R } from '../../r2/env';
++import logo2r from '../../assets/2r-logo.png';
+ 
+ // ─────────────────────────────────────────────────────────────
+ // Small store subscriptions (inline — only used here)
+@@ -1146,6 +1148,14 @@ export function HomeBackdrop() {
+ 
+   return (
+     <div className={`home-backdrop${visible ? '' : ' hidden'}`} aria-hidden={!visible}>
++      {IS_2R ? (
++        // 2R Tools: sem a tela de boas-vindas/dicas — só o próximo passo, em português
++        <div className="r2-home">
++          <img className="r2-home-logo" src={logo2r} alt="2R Tools" draggable={false} />
++          <div className="r2-home-title">Nenhuma placa aberta</div>
++          <div className="r2-home-text">Busque a placa na aba <b>Acervo 2R</b> (nuvem) ao lado, ou abra um arquivo deste computador em <b>Local</b> ou no botão <b>Abrir</b>.</div>
++        </div>
++      ) : (
+       <div className="home-backdrop-scroll">
+         <div className="home-backdrop-inner">
+           <Banner />
+@@ -1161,6 +1171,7 @@ export function HomeBackdrop() {
+           <Footer />
+         </div>
+       </div>
++      )}
+     </div>
+   );
+ }
+diff --git a/src/frontend/src/components/overlay/slots/FilterDropdown.tsx b/src/frontend/src/components/overlay/slots/FilterDropdown.tsx
+index 05c76cb..397c183 100644
+--- a/src/frontend/src/components/overlay/slots/FilterDropdown.tsx
++++ b/src/frontend/src/components/overlay/slots/FilterDropdown.tsx
+@@ -21,6 +21,7 @@ import { useRenderSettings } from '../../../hooks/useRenderSettings';
+ import { SuggestionList, type DropdownPopoverGroup } from '../dropdown-popover';
+ import { getOverlayIndex } from '../get-overlay-index';
+ import type { SlotCtx } from '../slot-ctx';
++import { looseMatch } from '../../../r2/loose-match';
+ 
+ type Kind = 'parts' | 'nets';
+ 
+@@ -78,11 +79,11 @@ export function FilterDropdown({ ctx, kind }: { ctx: SlotCtx; kind: Kind }) {
+ 
+   const buildGroups = (q: string): DropdownPopoverGroup[] => {
+     if (kind === 'parts') {
+-      const rows = q ? idx.parts.filter(p => p.nameLower.includes(q)) : idx.parts;
++      const rows = q ? idx.parts.filter(p => looseMatch(p.nameLower, q)) : idx.parts;
+       return [{ header: null, rows: rows.map(row => ({ row })) }];
+     }
+-    const normalRows = (q ? idx.netsNormal.filter(n => n.nameLower.includes(q)) : idx.netsNormal).map(row => ({ row }));
+-    const ncRows = (q ? idx.netsNc.filter(n => n.nameLower.includes(q)) : idx.netsNc).map(row => ({ row, dimmed: true }));
++    const normalRows = (q ? idx.netsNormal.filter(n => looseMatch(n.nameLower, q)) : idx.netsNormal).map(row => ({ row }));
++    const ncRows = (q ? idx.netsNc.filter(n => looseMatch(n.nameLower, q)) : idx.netsNc).map(row => ({ row, dimmed: true }));
+     const groups: DropdownPopoverGroup[] = [];
+     if (normalRows.length > 0) groups.push({ header: null, rows: normalRows });
+     if (ncRows.length > 0)     groups.push({ header: 'No connect', rows: ncRows });
+diff --git a/src/frontend/src/index.css b/src/frontend/src/index.css
+index a87a4da..6407c8d 100644
+--- a/src/frontend/src/index.css
++++ b/src/frontend/src/index.css
+@@ -1424,6 +1424,21 @@ body {
+   overflow: auto;
+   max-height: calc(100% - 80px);
+ }
++/* 2R Tools (FlexBV): filtro e cabeçalhos ordenáveis da tabela de pinos — sóbrio */
++.pin-filter-row { padding: 2px 0 4px; }
++.pin-filter-input {
++  width: 100%;
++  box-sizing: border-box;
++  padding: 2px 6px;
++  font-size: 0.9em;
++  color: var(--text-primary);
++  background: var(--bg-secondary);
++  border: 1px solid var(--border);
++  border-radius: 3px;
++}
++.pin-filter-input:focus { outline: none; border-color: var(--text-secondary); }
++.pin-th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
++.pin-th-sort:hover { color: var(--text-primary); }
+ 
+ .pin-table {
+   width: 100%;
+@@ -9839,3 +9854,511 @@ body {
+ .library-detail .library-binding-row { padding: 1px 4px; }
+ .library-detail .library-history-divider { margin: 2px 0; }
+ .library-detail .library-binding-empty { padding: 0 4px; }
++
++/* 2R Tools: barra de navegação (centralizar, zoom, girar, espelhar, microscópio,
++   mesclar, transparência, busca local, dividir tela) — visual sóbrio */
++.nav2r-bar { display:flex; align-items:center; gap:4px; padding:3px 8px; flex-wrap:wrap;
++  background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
++.nav2r-btn { display:inline-flex; align-items:center; gap:5px; min-height:28px; padding:3px 8px;
++  background: transparent; color: var(--text-primary); border:1px solid transparent; border-radius:4px;
++  cursor:pointer; font-size:0.85em; white-space:nowrap; }
++.nav2r-btn:hover { border-color: var(--border); background: var(--bg-primary); }
++.nav2r-btn.active { border-color: var(--text-secondary); background: var(--bg-primary); font-weight:600; }
++.nav2r-label { line-height:1; }
++.nav2r-sep { width:1px; height:20px; background: var(--border); margin:0 4px; }
++.nav2r-pop-wrap { position:relative; display:inline-flex; }
++.nav2r-pop { position:absolute; top:calc(100% + 4px); left:0; z-index:1000; min-width:240px; padding:10px;
++  background: var(--bg-secondary); border:1px solid var(--border); border-radius:6px;
++  box-shadow: 0 6px 18px rgba(0,0,0,0.45); display:flex; flex-direction:column; gap:8px; }
++.nav2r-menu { padding:4px; gap:0; }
++.nav2r-item { text-align:left; padding:7px 10px; background:transparent; border:none; border-radius:4px;
++  color: var(--text-secondary); cursor:pointer; font-size:0.9em; }
++.nav2r-item:hover { background: var(--bg-primary); color: var(--text-primary); }
++.nav2r-item.sel { color: var(--text-primary); font-weight:700; }
++.nav2r-row { display:grid; grid-template-columns: 56px 1fr 44px; align-items:center; gap:8px; font-size:0.85em; }
++.nav2r-row b { text-align:right; }
++.nav2r-hint { font-size:0.8em; color: var(--text-secondary); }
++.nav2r-link { background:none; border:none; padding:0; color: var(--text-primary); text-decoration:underline; cursor:pointer; font-size:1em; }
++
++/* ── 2R Tools: visual neutro (Roger, 10/10/2026: «tudo neutro, cara de programa profissional») ── */
++html.r2 { --green: #b5b8bf; --icon-board-bg: #3a3d44; --icon-pdf-bg: #3a3d44; }
++html.r2 .update-badge-wrap { display: none !important; }
++html.r2 .badge-top { background: var(--r2-bg2, #26282d); color: var(--text-primary); }
++
++/* Acervo 2R (aba da nuvem) */
++.r2acv { display:flex; flex-direction:column; min-height:0; flex:1; overflow:auto; padding:10px 10px 14px; gap:10px; }
++.r2acv-title { display:flex; align-items:center; gap:6px; font-weight:700; font-size:1.05em; color: var(--text-primary); }
++.r2acv-sub { font-weight:400; font-size:0.8em; color: var(--text-secondary); border:1px solid var(--border); border-radius:10px; padding:0 7px; }
++.r2acv-section { display:flex; flex-direction:column; gap:6px; }
++.r2acv-search { width:100%; box-sizing:border-box; padding:8px 10px; font-size:1em; color: var(--text-primary);
++  background: var(--bg-primary); border:1px solid var(--border); border-radius:6px; }
++.r2acv-search:focus { outline:none; border-color: var(--text-secondary); }
++.r2acv-note { font-size:0.85em; color: var(--text-secondary); line-height:1.35; }
++.r2acv-list, .r2acv-cards, .r2acv-groups { display:flex; flex-direction:column; gap:2px; }
++.r2acv-row { display:flex; gap:8px; align-items:flex-start; text-align:left; padding:7px 8px; border:1px solid transparent;
++  border-radius:5px; background:transparent; color: var(--text-primary); cursor:pointer; }
++.r2acv-row:hover, .r2acv-grow:hover, .r2acv-card:hover { background: var(--bg-tertiary); border-color: var(--border); }
++.r2acv-row.busy, .r2acv-card.busy, .r2acv-grow.busy, .r2acv-table tr.busy td { opacity:0.55; }
++.r2acv-ico { color: var(--text-secondary); padding-top:2px; }
++.r2acv-main { display:flex; flex-direction:column; min-width:0; }
++.r2acv-name { font-weight:600; font-size:0.95em; }
++.r2acv-folder { font-size:0.8em; color: var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
++.r2acv-tag { margin-left:6px; font-size:0.75em; font-weight:600; color: var(--text-secondary); border:1px solid var(--border); border-radius:3px; padding:0 4px; }
++.r2acv-cards { gap:6px; }
++.r2acv-card { display:flex; flex-direction:column; gap:3px; text-align:left; padding:9px 10px; border:1px solid var(--border);
++  border-radius:6px; background: var(--bg-primary); color: var(--text-primary); cursor:pointer; }
++.r2acv-card-board { font-size:1.1em; font-weight:700; letter-spacing:0.3px; }
++.r2acv-card-model { font-size:0.8em; color: var(--text-secondary); }
++.r2acv-chips { display:flex; gap:4px; margin-top:2px; }
++.r2acv-chip { font-size:0.7em; font-weight:700; padding:1px 6px; border-radius:3px; background: var(--bg-tertiary); color: var(--text-primary); border:1px solid var(--border); }
++.r2acv-group { display:flex; flex-direction:column; margin-bottom:6px; }
++.r2acv-group-head { font-size:0.78em; font-weight:700; color: var(--text-secondary); text-transform:uppercase; letter-spacing:0.4px;
++  padding:6px 4px 4px; border-bottom:1px solid var(--border); margin-bottom:2px; }
++.r2acv-grow { display:flex; align-items:center; gap:8px; padding:6px 8px; text-align:left; border:1px solid transparent; border-radius:4px;
++  background:transparent; color: var(--text-primary); cursor:pointer; font-size:0.95em; }
++.r2acv-table { width:100%; border-collapse:collapse; font-size:0.9em; }
++.r2acv-table th { text-align:left; font-size:0.8em; color: var(--text-secondary); font-weight:700; padding:5px 6px; border-bottom:1px solid var(--border); }
++.r2acv-table td { padding:6px; border-bottom:1px solid var(--border); cursor:pointer; color: var(--text-primary); }
++.r2acv-table tr:hover td { background: var(--bg-tertiary); }
++.r2acv-td-board { font-weight:700; white-space:nowrap; }
++.r2acv-td-model { color: var(--text-secondary); font-size:0.9em; }
++.r2acv-upload { border-top:1px solid var(--border); padding-top:8px; margin-top:4px; }
++.r2acv-head { display:flex; align-items:center; gap:6px; background:transparent; border:none; color: var(--text-primary); font-weight:600; cursor:pointer; padding:4px 0; }
++.r2acv-caret { margin-left:auto; color: var(--text-secondary); }
++.r2acv-form { display:flex; flex-direction:column; gap:7px; }
++.r2acv-form label { display:flex; flex-direction:column; gap:3px; font-size:0.82em; color: var(--text-secondary); }
++.r2acv-form input:not([type=checkbox]) { padding:6px 8px; font-size:1.1em; color: var(--text-primary); background: var(--bg-primary);
++  border:1px solid var(--border); border-radius:5px; }
++.r2acv-form input[type=file] { padding:4px; font-size:0.95em; }
++.r2acv-two { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
++.r2acv-check { flex-direction:row !important; align-items:flex-start; gap:6px !important; line-height:1.35; }
++.r2acv-check input { margin-top:2px; accent-color:#4a4d55; }
++.r2acv-msg { font-size:0.85em; color: var(--text-primary); }
++.r2acv-msg.err { color:#ff6b5e; }
++.r2acv-send { align-self:flex-end; padding:7px 18px; font-weight:700; color:var(--r2-strong); background:var(--r2-bg0, #000); border:1px solid #2e9e5b; border-radius:6px; cursor:pointer; }
++.r2acv-send:disabled { opacity:0.5; cursor:default; }
++.r2-home { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:24px; text-align:center; }
++.r2-home-title { font-size:1.2em; font-weight:700; color: var(--text-primary); }
++.r2-home-text { max-width:440px; color: var(--text-secondary); line-height:1.5; }
++
++/* barra livre: arrastar com «ímã» (Roger, 10/10/2026) */
++.nav2r-slot { position:relative; display:inline-flex; align-items:center; cursor:grab; }
++.nav2r-slot.dragging { opacity:0.35; }
++.nav2r-slot.snap-l::before, .nav2r-slot.snap-r::after { content:''; position:absolute; top:3px; bottom:3px; width:3px;
++  background: var(--text-primary); border-radius:2px; box-shadow:0 0 6px rgba(255,255,255,0.35); }
++.nav2r-slot.snap-l::before { left:-3px; }
++.nav2r-slot.snap-r::after { right:-3px; }
++.nav2r-sepslot { padding:0 3px; height:28px; }
++.nav2r-add { margin-left:4px; border:1px dashed var(--border); color: var(--text-secondary); }
++.nav2r-addmenu { min-width:280px; max-height:70vh; overflow:auto; }
++.nav2r-item-ico { display:flex; align-items:center; gap:8px; }
++.nav2r-menu-sep { height:1px; background: var(--border); margin:4px 0; }
++.nav2r-ctx { z-index:2000; min-width:220px; }
++
++/* legenda das cores das nets (2R) */
++.r2-legend { position:absolute; left:10px; bottom:10px; z-index:6; max-width:280px; max-height:60%; overflow:auto;
++  background: var(--r2-hud-bg, rgba(14,15,17,0.92)); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:0.8em;
++  color: var(--text-primary); box-shadow:0 4px 14px rgba(0,0,0,0.4); }
++.r2-legend.closed { padding:4px 8px; }
++.r2-legend-head { display:flex; align-items:center; gap:8px; width:100%; background:none; border:none; color: var(--text-primary);
++  font-weight:700; cursor:pointer; padding:0; font-size:1em; }
++.r2-legend-caret { margin-left:auto; color: var(--text-secondary); }
++.r2-legend-group { margin-top:6px; }
++.r2-legend-label { font-size:0.85em; font-weight:700; color: var(--text-secondary); text-transform:uppercase; letter-spacing:0.4px; margin-bottom:2px; }
++.r2-legend-row { display:flex; align-items:center; gap:6px; padding:1px 0; }
++.r2-legend-dot { width:11px; height:11px; border-radius:50%; flex:0 0 11px; border:1px solid rgba(255,255,255,0.25); }
++.r2-legend-kw { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
++
++/* ── 2R: padrão FlexBV (Roger, 10/10/2026: «bem confuso… seguir um padrão de mercado») ──
++   uma barra só em cima (ícones), placa limpa (sem a faixa de botões por cima e sem o contador),
++   abas laterais só Acervo 2R / Local / Histórico / Ajustes */
++.nav2r-inline { background:transparent; border:none; padding:0 4px; flex-wrap:nowrap; gap:2px; }
++.nav2r-inline .nav2r-label { display:none; }
++.nav2r-inline .nav2r-btn { min-height:28px; padding:3px 6px; }
++.nav2r-inline .nav2r-sep { height:18px; margin:0 3px; }
++html.r2 .board-status-indicators { display:none !important; }
++html.r2 .board-hud { display:none !important; }
++html.r2 .toolbar-search { min-width:320px; }
++
++/* menu de texto (padrão FlexBV) */
++.r2-menubar { display:flex; align-items:center; gap:2px; height:28px; padding:0 6px; background: var(--bg-primary);
++  border-bottom:1px solid var(--border); font-size:0.9em; user-select:none; }
++.r2-menu { position:relative; }
++.r2-menu-title { background:transparent; border:none; color: var(--text-primary); padding:4px 10px; border-radius:4px; cursor:pointer; font-size:1em; }
++.r2-menu-title:hover, .r2-menu-title.open { background: var(--bg-tertiary); }
++.r2-menu-pop { position:absolute; top:100%; left:0; z-index:3000; min-width:300px; padding:4px; margin-top:2px;
++  background: var(--bg-secondary); border:1px solid var(--border); border-radius:6px; box-shadow:0 8px 22px rgba(0,0,0,0.5);
++  display:flex; flex-direction:column; }
++.r2-menu-item { display:flex; align-items:center; gap:16px; text-align:left; padding:6px 10px; background:transparent; border:none;
++  border-radius:4px; color: var(--text-primary); cursor:pointer; font-size:1em; }
++.r2-menu-item:hover { background: var(--bg-tertiary); font-weight:600; }
++.r2-menu-key { margin-left:auto; color: var(--text-secondary); font-size:0.85em; }
++.r2-menu-sep { height:1px; background: var(--border); margin:4px 2px; }
++.r2-menu-head { padding:6px 10px 2px; font-size:0.78em; font-weight:700; color: var(--text-secondary); text-transform:uppercase; letter-spacing:0.4px; }
++
++/* busca com escopo (2R) e grupo do microscópio */
++.r2-scope { height:28px; margin-right:4px; padding:0 6px; background: var(--bg-primary); color: var(--text-primary);
++  border:1px solid var(--border); border-radius:4px; font-size:0.85em; }
++.r2-pinsearch { position:relative; }
++.r2-pin-input:disabled { opacity:0.6; }
++.r2-pin-drop { position:absolute; top:calc(100% + 4px); left:0; right:0; min-width:320px; max-height:360px; overflow:auto; z-index:3000;
++  background: var(--bg-secondary); border:1px solid var(--border); border-radius:6px; padding:4px; box-shadow:0 8px 22px rgba(0,0,0,0.5); }
++.r2-pin-row { display:flex; gap:12px; width:100%; text-align:left; padding:5px 8px; background:transparent; border:none; border-radius:4px;
++  color: var(--text-primary); cursor:pointer; font-size:0.9em; }
++.r2-pin-row:hover { background: var(--bg-tertiary); }
++.r2-pin-num { min-width:52px; font-weight:700; }
++.r2-pin-net { color: var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
++.r2-pin-none { padding:8px; color: var(--text-secondary); font-size:0.85em; }
++.nav2r-micpop { min-width:280px; }
++.nav2r-micpop .nav2r-pop { position:static; box-shadow:none; border:none; padding:4px 6px; min-width:0; }
++
++/* aba Medições (multímetro) */
++.r2meter-kinds { display:flex; gap:6px; }
++.r2meter-kind { flex:1; padding:7px 6px; background: var(--bg-primary); color: var(--text-secondary); border:1px solid var(--border); border-radius:5px; cursor:pointer; font-size:0.85em; }
++.r2meter-kind.sel { color: var(--text-primary); border-color: var(--text-primary); font-weight:700; }
++.r2meter-field { display:flex; flex-direction:column; gap:3px; font-size:0.82em; color: var(--text-secondary); }
++.r2meter-field input, .r2meter-field select { padding:6px 8px; font-size:1.1em; color: var(--text-primary); background: var(--bg-primary); border:1px solid var(--border); border-radius:5px; }
++.r2meter-actions { display:flex; gap:6px; flex-wrap:wrap; }
++.r2meter-btn { display:inline-flex; align-items:center; gap:5px; padding:6px 12px; border-radius:6px; cursor:pointer; font-weight:600; }
++.r2meter-off { background: var(--bg-primary); color: var(--text-primary); border:1px solid var(--border); }
++.r2meter-live { display:flex; align-items:baseline; gap:6px; padding:8px 10px; background:var(--r2-bg0, #000); border:1px solid var(--border); border-radius:6px; }
++.r2meter-val { font-family: ui-monospace, Menlo, monospace; font-size:1.8em; font-weight:700; color:var(--r2-strong); }
++.r2meter-unit { color: var(--text-secondary); }
++.r2meter-tolrow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:0.82em; color: var(--text-secondary); }
++.r2meter-tol { display:flex; align-items:center; gap:3px; }
++.r2meter-tol input { width:44px; padding:3px 4px; color: var(--text-primary); background: var(--bg-primary); border:1px solid var(--border); border-radius:4px; }
++.r2meter-histhead { display:flex; align-items:center; gap:6px; }
++.r2meter-icon { margin-left:auto; background:transparent; border:1px solid var(--border); color: var(--text-primary); border-radius:4px; padding:3px 6px; cursor:pointer; }
++.r2meter-icon + .r2meter-icon { margin-left:0; }
++.r2meter-table td { cursor:default; }
++.r2meter-fora td { color:#ff6b5e; }
++
++/* 2R: mapear componente — sequência dos pinos e ponto de medição mais próximo */
++.r2map-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
++.r2map-count { font-size: 11px; color: var(--text-secondary, var(--r2-mute)); }
++.r2map-opts { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
++.r2map-nav { display: flex; gap: 6px; margin-bottom: 6px; }
++.r2map-nav .r2meter-btn { flex: 1; justify-content: center; }
++.r2map-pins { display: flex; flex-wrap: wrap; gap: 3px; max-height: 132px; overflow: auto; padding: 2px 0; }
++.r2map-pin { min-width: 30px; padding: 2px 5px; font-size: 11px; border-radius: 4px; border: 1px solid var(--r2-line);
++  background: transparent; color: var(--text-secondary, var(--r2-text2)); cursor: pointer; }
++.r2map-pin.done { background: var(--r2-line-soft); color: var(--r2-text); }
++.r2map-pin.cur { border-color: var(--r2-strong); color: var(--r2-strong); font-weight: 700; }
++.r2map-probe { margin-top: 8px; border-top: 1px solid var(--r2-line-soft); padding-top: 8px; display: flex; flex-direction: column; gap: 4px; }
++.r2map-sub { font-size: 12px; color: var(--text-secondary, var(--r2-text2)); }
++.r2map-pt { display: flex; align-items: center; gap: 6px; }
++.r2map-pt-name { flex: 1; text-align: left; background: transparent; border: 1px solid var(--r2-line-soft); border-radius: 6px;
++  padding: 4px 8px; color: var(--r2-text); cursor: pointer; display: flex; flex-direction: column; font-size: 12px; }
++.r2map-pt-name:hover { border-color: var(--r2-line-strong); }
++.r2map-pt.sel .r2map-pt-name { border-color: var(--r2-strong); font-weight: 700; color: var(--r2-strong); }
++.r2map-pt-info { font-size: 11px; font-weight: 400; color: var(--text-secondary, var(--r2-mute)); }
++.r2map-via { color: var(--text-secondary, var(--r2-mute)); font-size: 11px; }
++
++/* 2R Tools: captura (auto/manual/tecla/som) e ações do histórico — 10/10/2026 */
++.r2cap .r2meter-kinds { margin-bottom: 6px; }
++.r2cap-lbl { font-size: 12px; color: var(--text-secondary, var(--r2-text2)); align-self: center; }
++.r2cap-key { min-width: 70px; justify-content: center; font-weight: 700; }
++.r2cap-key.wait { border-color: var(--r2-strong); color: var(--r2-strong); }
++.r2cap-test { width: auto !important; padding: 0 6px; font-size: 11px; }
++.r2hist-sub { display: block; font-size: 10.5px; font-weight: 400; color: var(--text-secondary, var(--r2-mute)); line-height: 1.3; }
++.r2hist-act { white-space: nowrap; }
++.r2hist-act button { background: transparent; border: 0; color: var(--text-secondary, var(--r2-mute)); cursor: pointer; padding: 0 3px; font-size: 13px; }
++.r2hist-act button:hover { color: var(--r2-strong); }
++.r2hist-ed { color: var(--text-secondary, var(--r2-mute)); margin-left: 2px; }
++.r2hist-edit { width: 64px; font-size: 12px; padding: 1px 4px; }
++.r2meter-table tr.r2hist-redo td { outline: 1px dashed var(--r2-mute); }
++.r2hist-sure { width: auto !important; padding: 0 6px; font-size: 11px; color: #ff6b6b !important; }
++.r2cap-sound { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
++.r2cap-tests { margin: 0 0 4px 22px; flex-wrap: wrap; }
++.r2cap-tests { justify-content: flex-start !important; }
++.r2-beta { font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--r2-line-strong); color: var(--r2-text2); vertical-align: middle; }
++/* histórico cabe no painel: colunas enxutas, ações empilhadas */
++.r2meter-table { table-layout: fixed; }
++.r2meter-table th:nth-child(1), .r2meter-table td:nth-child(1) { width: auto; overflow: hidden; text-overflow: ellipsis; }
++.r2meter-table th:nth-child(2), .r2meter-table td:nth-child(2) { width: 54px; padding-left: 2px; padding-right: 2px; }
++.r2meter-table th:nth-child(3), .r2meter-table td:nth-child(3) { width: 54px; padding-left: 2px; padding-right: 2px; }
++.r2meter-table th:nth-child(4), .r2meter-table td:nth-child(4) { width: 16px; padding-left: 0; padding-right: 0; text-align: center; }
++.r2meter-table th:nth-child(5), .r2meter-table td:nth-child(5) { width: 62px; padding-left: 0; padding-right: 0; text-align: right; }
++.r2hist-act button { padding: 0 2px; }
++/* logo 2R Tools — Roger, 10/10/2026 */
++.r2-menubar { align-items: center; }
++.r2-menubar-logo { margin-left: auto; height: 18px; width: auto; opacity: .9; padding-right: 12px; user-select: none; pointer-events: none; }
++.r2-home-logo { display: block; margin: 0 auto 18px; height: 64px; width: auto; opacity: .18; user-select: none; }
++
++/* aba Curvas */
++.r2cv-plot { display: block; border-radius: 8px; margin: 6px 0; }
++.r2cv-plot.small { width: 110px; flex: none; margin: 0; }
++.r2cv-bg { fill: var(--r2-bg0); }
++.r2cv-grid { stroke: var(--r2-line-soft); stroke-width: 1; }
++.r2cv-axis { stroke: var(--r2-line); stroke-width: 1; }
++.r2cv-lbl { fill: var(--r2-mute); font-size: 9px; }
++.r2cv-line { fill: none; stroke-linejoin: round; stroke-linecap: round; }
++.r2cv-line.oficial { stroke: var(--r2-strong); stroke-width: 2.2; }
++.r2cv-line.live { stroke: #9fd3ff; stroke-width: 1.8; stroke-dasharray: 5 3; }
++.r2cv-line.minha { stroke: var(--r2-text2); stroke-width: 1.8; }
++.r2cv-line.outra { stroke: #6e7178; stroke-width: 1.6; }
++.r2cv-legend { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 11.5px; color: var(--text-secondary, var(--r2-text2)); }
++.r2cv-legend i { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--r2-strong); vertical-align: middle; margin-right: 4px; }
++.r2cv-legend i.live { border-top: 2px dashed #9fd3ff; }
++.r2cv-sim { margin-left: auto; font-weight: 700; padding: 1px 7px; border-radius: 5px; border: 1px solid var(--r2-line); color: var(--r2-strong); }
++.r2cv-sim.bad { color: #ff6b6b; border-color: #ff6b6b; }
++.r2cv-stab { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-secondary, var(--r2-text2)); margin: 8px 0 4px; }
++.r2cv-stab-bar { flex: 0 0 90px; height: 6px; border-radius: 3px; background: var(--r2-line-soft); overflow: hidden; }
++.r2cv-stab-bar div { height: 100%; background: var(--r2-mute); transition: width .25s; }
++.r2cv-stab-bar div.ok { background: var(--r2-strong); }
++.r2cv-pinhead { font-size: 14px; }
++.r2cv-listhead { margin: 12px 0 6px; }
++.r2cv-item { display: flex; gap: 10px; align-items: center; padding: 6px; border: 1px solid var(--r2-line-soft); border-radius: 8px; margin-bottom: 6px; }
++.r2cv-item.redo { outline: 1px dashed var(--r2-mute); }
++.r2cv-item.oficial { border-color: var(--r2-line-strong); }
++.r2cv-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12px; }
++.r2cv-chip { align-self: flex-start; font-size: 9.5px; font-weight: 800; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--r2-line-strong); color: var(--r2-text2); }
++.r2cv-chip.oficial { background: var(--r2-strong); color: var(--r2-inv); border-color: var(--r2-strong); }
++.r2cv-chip.recusada { color: #ff6b6b; border-color: #ff6b6b; }
++.r2cv-act { display: flex; flex-direction: column; gap: 4px; }
++.r2cv-review .r2meter-btn { padding: 3px 8px; font-size: 11.5px; }
++.r2cv-thumb { width: 110px; height: 78px; object-fit: cover; border-radius: 6px; }
++.r2cv-link { background: none; border: 0; color: var(--text-secondary, var(--r2-text2)); cursor: pointer; padding: 4px 0; font-size: 12px; text-decoration: underline; }
++/* Teleguiado */
++.r2gd-text { width: 100%; box-sizing: border-box; font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--bg-primary, var(--r2-bg0)); color: var(--text-primary, var(--r2-strong)); border: 1px solid var(--r2-line); border-radius: 6px; padding: 8px; margin: 6px 0; resize: vertical; }
++.r2gd-rot { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
++.r2gd-rot-open { flex: 1; text-align: left; display: flex; flex-direction: column; background: transparent; border: 1px solid var(--r2-line-soft); border-radius: 7px; padding: 6px 9px; color: var(--text-primary, var(--r2-strong)); cursor: pointer; }
++.r2gd-rot-open:hover { border-color: var(--r2-line-strong); }
++.r2gd-others summary { cursor: pointer; font-size: 12px; color: var(--text-secondary, var(--r2-text2)); margin-top: 8px; }
++.r2gd-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
++.r2gd-steps { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
++.r2gd-step { display: flex; gap: 8px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 4px 6px; color: var(--text-primary, var(--r2-text)); cursor: pointer; font-size: 12px; }
++.r2gd-step:hover { background: var(--bg-tertiary, var(--r2-bg2)); }
++.r2gd-step.cur { border-color: var(--r2-strong); background: var(--r2-bg2); }
++.r2gd-step.cur .r2gd-nets { font-weight: 700; color: var(--r2-strong); }
++.r2gd-step.miss .r2gd-nets { color: var(--r2-mute); }
++.r2gd-n { font-family: ui-monospace, Menlo, monospace; color: var(--r2-mute); flex: none; width: 20px; }
++.r2gd-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
++.r2gd-nets { word-break: break-all; }
++.r2gd-pts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
++.r2gd-pt { font-size: 11px; border: 1px solid var(--r2-line); border-radius: 4px; padding: 1px 6px; color: var(--r2-text2); }
++.r2gd-pt.sel { border-color: var(--r2-strong); color: var(--r2-strong); font-weight: 700; }
++.r2gd-miss { color: #ff6b6b; font-size: 11px; }
++.r2gd-hud { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30; display: flex; align-items: stretch; gap: 0;
++  background: var(--r2-hud-bg); border: 1px solid var(--r2-line-strong); border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.5); min-width: 380px; max-width: 70%; }
++.r2gd-hud-arrow { background: transparent; border: 0; color: var(--r2-strong); font-size: 30px; line-height: 1; padding: 0 14px; cursor: pointer; }
++.r2gd-hud-arrow:disabled { color: var(--r2-line-strong); cursor: default; }
++.r2gd-hud-body { flex: 1; padding: 8px 4px; text-align: center; }
++.r2gd-hud-top { font-size: 11px; color: var(--r2-mute); letter-spacing: .02em; }
++.r2gd-hud-net { font-size: 19px; font-weight: 800; color: var(--r2-strong); font-family: ui-monospace, Menlo, monospace; margin: 2px 0; }
++.r2gd-hud-sub { font-size: 12px; color: var(--r2-text2); }
++.r2gd-hud-note { color: var(--r2-mute); }
++.r2gd-tools { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
++.r2gd-tools button, .r2gd-edit-row button:not(.r2meter-btn) { background: transparent; border: 1px solid var(--r2-line); border-radius: 5px; color: var(--r2-text2); font-size: 11px; padding: 2px 7px; cursor: pointer; }
++.r2gd-tools button:hover { border-color: var(--r2-strong); color: var(--r2-strong); }
++.r2gd-pt.fixed { border-style: solid; border-color: var(--r2-text2); }
++.r2gd-edit { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; cursor: default; }
++.r2gd-edit label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text-secondary, var(--r2-text2)); }
++.r2gd-edit input { background: var(--bg-primary, var(--r2-bg0)); color: var(--r2-strong); border: 1px solid var(--r2-line); border-radius: 5px; padding: 4px 7px; font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
++.r2gd-edit-row { display: flex; gap: 6px; align-items: center; }
++.r2gd-edit-row input { flex: 1; min-width: 0; }
++.r2gd-hud-fix { margin: 4px auto 0; display: block; background: var(--r2-strong); color: var(--r2-inv); border: 0; border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
++.r2gd-credit { font-size: 12px; color: var(--text-secondary, var(--r2-text2)); margin: 4px 0; }
++.r2gd-credit input { flex: 1; background: var(--bg-primary, var(--r2-bg0)); color: var(--r2-strong); border: 1px solid var(--r2-line); border-radius: 5px; padding: 4px 7px; font-size: 12px; }
++/* Sequência de start: painel com colunas e legenda embaixo */
++.r2gd { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden !important; padding-bottom: 0; }
++.r2gd-scroll { flex: 1; min-height: 0; overflow: auto; }
++.r2-legend-sidebar { flex: none; border-top: 1px solid var(--r2-line-soft); max-height: 42%; overflow: auto; background: var(--bg-secondary); }
++.r2gd-legend-dock { flex: none; border-top: 1px solid var(--r2-line-soft); max-height: 45%; overflow: auto; }
++.r2-legend.embedded { position: static; box-shadow: none; border: 0; border-radius: 0; background: transparent; max-width: none; width: auto; margin: 0; }
++.r2-legend.embedded.closed { padding-bottom: 0; }
++.r2gd-cols, .r2gd-step { display: grid; grid-template-columns: 22px minmax(0,1fr) 54px 54px 54px; gap: 4px; align-items: start; }
++.r2gd-cols { font-size: 10.5px; font-weight: 700; color: var(--text-secondary, var(--r2-mute)); padding: 6px 6px 2px; margin-top: 6px; border-bottom: 1px solid var(--r2-line-soft); }
++.r2gd-cols span:nth-child(n+3) { text-align: center; }
++.r2gd-cell { width: 100%; box-sizing: border-box; background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--r2-text); font-size: 11.5px; font-family: ui-monospace, Menlo, monospace; text-align: center; padding: 2px 2px; }
++.r2gd-cell::placeholder { color: var(--r2-line); }
++.r2gd-cell:hover { border-color: var(--r2-line); }
++.r2gd-cell:focus { border-color: var(--r2-strong); outline: none; background: var(--r2-bg0); }
++.r2gd-cell.has { color: var(--r2-strong); font-weight: 700; }
++.r2gd-hud-vals { display: flex; justify-content: center; gap: 14px; font-size: 12px; color: var(--r2-mute); margin-top: 3px; }
++.r2gd-hud-vals b { color: var(--r2-strong); font-family: ui-monospace, Menlo, monospace; }
++.r2gd-extra { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 4px; cursor: default; }
++.r2gd-step .r2gd-nets { word-break: break-word; overflow-wrap: anywhere; }
++/* menus de texto dentro da barra de ícones (uma barra só) */
++.r2-menubar.inline { height: auto; padding: 0 2px; border-bottom: 0; background: transparent; flex: none; }
++.r2-menubar.inline .r2-menu-title { padding: 4px 7px; }
++.r2-toolbar-logo { height: 18px; width: auto; opacity: .9; margin: 0 4px 0 6px; user-select: none; pointer-events: none; flex: none; }
++html.r2 .toolbar .toolbar-search, html.r2 .toolbar .r2-pin-input { min-width: 140px; }
++/* 2R Tools (Roger, 10/10/2026): «alinhar o esquemático em relação ao boardview» —
++   a barra do PDF flutua por cima da página, assim a página começa na mesma
++   altura da placa (e termina junto). */
++html.r2 .pdf-viewer { position: relative; }
++html.r2 .pdf-viewer > .pdf-toolbar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20;
++  border: 1px solid var(--border); border-radius: 9px; box-shadow: 0 6px 20px rgba(0,0,0,.45); max-width: calc(100% - 24px);
++  background: color-mix(in srgb, var(--bg-tertiary) 92%, transparent); opacity: .55; transition: opacity .15s; flex-wrap: nowrap; overflow: hidden; }
++html.r2 .pdf-viewer:hover > .pdf-toolbar, html.r2 .pdf-viewer > .pdf-toolbar:focus-within { opacity: 1; }
++/* barra do PDF na linha das abas, à direita */
++.r2-pdf-hdr { display: flex; align-items: center; height: 100%; }
++.r2-pdf-hdr .pdf-toolbar { border: 0; background: transparent; padding: 0 6px; height: 100%; flex-wrap: nowrap; }
++/* aba do PDF continua com o nome visível; a barra encolhe primeiro */
++html.r2 .r2-pdf-hdr .pdf-toolbar { gap: 4px; }
++
++/* barra do PDF na linha da aba (Roger, 22:44–22:45): nome do PDF inteiro, logo depois os
++   ícones todos juntos e a busca no fim da fila, alinhados à esquerda */
++html.r2 .dv-groupview .dv-tabs-and-actions-container .dv-tabs-container { flex: 0 0 auto; }
++html.r2 .dv-groupview .dv-tabs-and-actions-container .dv-void-container { flex: 0 0 6px; min-width: 6px; }
++html.r2 .dv-groupview .dv-right-actions-container { flex: 1 1 0; min-width: 0; display: flex; justify-content: flex-start; overflow: hidden; container-type: inline-size; }
++html.r2 .r2-pdf-hdr { min-width: 0; flex: 1 1 auto; }
++html.r2 .r2-pdf-hdr .pdf-toolbar { gap: 4px; min-width: 0; justify-content: flex-start; }
++html.r2 .r2-pdf-hdr .pdf-toolbar-separator, html.r2 .r2-pdf-hdr .pdf-toolbar-spacer { display: none; }
++html.r2 .r2-pdf-hdr .pdf-search-wrapper { order: 99; flex: 1 1 170px; min-width: 100px; max-width: 260px; }
++html.r2 .r2-pdf-hdr .pdf-search-wrapper input { max-width: none; min-width: 0; width: 100%; }
++/* painel estreito: some primeiro o que menos se usa (zoom/mão → marca-texto → girar → marcador) */
++html.r2 .r2-pdf-hdr .pdf-page-input { width: 34px; }
++html.r2 .r2-pdf-hdr .pdf-toolbar-btn { padding: 3px 5px; }
++@container (max-width: 540px) { .r2-pdf-hdr .pdf-viewport-group { display: none; } }
++@container (max-width: 450px) { .r2-pdf-hdr .pdf-toolbar > div:nth-of-type(7) { display: none; } }
++@container (max-width: 400px) { .r2-pdf-hdr .pdf-toolbar > div:nth-of-type(2) { display: none; } }
++@container (max-width: 330px) { .r2-pdf-hdr .pdf-toolbar > div:nth-of-type(5) { display: none; } }
++/* 2R Tools (Roger, 22:48 «corrigir esses espaçamentos»): tabela de pinos sem quebrar
++   a coluna OBD letra por letra; rola na horizontal se faltar espaço */
++html.r2 .pin-table-container { overflow: auto; }
++html.r2 .pin-table td { white-space: nowrap; }
++html.r2 .pin-table td.pin-obd { white-space: nowrap; width: 1%; }
++html.r2 .pin-table td.pin-obd * { white-space: nowrap; }
++/* barra do PDF: página compacta, sem buraco entre «1» e «/ 117» */
++html.r2 .pdf-toolbar-group .pdf-page-input { width: 36px !important; min-width: 0; flex: none; text-align: center; padding: 0 2px; }
++html.r2 .pdf-toolbar-group .pdf-page-info { padding: 0 4px 0 0; white-space: nowrap; }
++html.r2 .r2-pdf-hdr .pdf-toolbar { gap: 6px; padding: 0 6px; }
++.r2-live-hint { flex: 1; align-self: center; font-size: 11.5px; color: var(--text-secondary, var(--r2-text2)); text-align: center; }
++/* Ajustes numa janela pelo menu Preferências */
++.r2-setwin { position: fixed; top: 52px; right: 14px; width: 440px; max-width: calc(100vw - 28px); height: calc(100vh - 96px); z-index: 2600;
++  display: flex; flex-direction: column; background: var(--bg-secondary); border: 1px solid var(--r2-line-strong); border-radius: 10px; box-shadow: 0 14px 40px rgba(0,0,0,.6); overflow: hidden; }
++.r2-setwin-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: move; user-select: none; background: var(--bg-tertiary); }
++.r2-setwin-sub { font-size: 11px; color: var(--text-secondary); }
++.r2-setwin-x { margin-left: auto; background: transparent; border: 0; color: var(--text-secondary); cursor: pointer; padding: 2px; }
++.r2-setwin-x:hover { color: var(--r2-strong); }
++.r2-setwin-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
++.r2-tp { position: fixed; top: 52px; right: 14px; width: 360px; z-index: 2700; background: var(--bg-secondary); border: 1px solid var(--r2-line-strong); border-radius: 10px; box-shadow: 0 14px 40px rgba(0,0,0,.6); overflow: hidden; }
++.r2-tp-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 10px; }
++.r2-tp-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 12.5px; color: var(--text-primary); }
++.r2-tp-row { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-primary); }
++.r2-tp-row input[type=range] { width: 100%; accent-color: #d8d9dc; }
++.r2-tp-actions { display: flex; gap: 6px; }
++
++/* 2R: paleta dos painéis — escuro (padrão) e claro (temas «2R Claro …») */
++:root { --r2-strong:#ffffff; --r2-text:#e8e8ea; --r2-text2:#c8cad0; --r2-mute:#9a9da5; --r2-line-strong:#5a5d64; --r2-line:#3a3d44;
++  --r2-line-soft:#2a2c31; --r2-bg2:#1c1d21; --r2-bg0:#0e0f11; --r2-inv:#111111; --r2-hud-bg:rgba(14,15,17,.94); }
++html.r2-light { --r2-strong:#111316; --r2-text:#1f2328; --r2-text2:#3f454d; --r2-mute:#6b7078; --r2-line-strong:#8f959d; --r2-line:#c3c7cc;
++  --r2-line-soft:#d6d9dd; --r2-bg2:#e4e6e9; --r2-bg0:#f7f8f9; --r2-inv:#ffffff; --r2-hud-bg:rgba(250,250,251,.95); }
++html.r2-light .r2cv-line.live { stroke: #2d6a9f; }
++html.r2-light .r2-menubar-logo, html.r2-light .r2-toolbar-logo, html.r2-light .r2-home-logo { filter: invert(1); }
++
++/* 2R: bola do BGA no HUD da Sequência de start */
++.r2gd-hud-bga { margin-top: 3px; font-size: 0.92em; color: var(--text-primary); }
++.r2gd-hud-bga b { font-family: var(--font-mono, monospace); font-size: 1.15em; padding: 0 4px; border: 1px solid var(--r2-line, #555); border-radius: 4px; }
++
++/* 2R: componentes por grupo */
++.r2-pf { width: 300px; }
++.r2-pf-list { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
++.r2-pf .r2-tp-actions { flex-wrap: wrap; }
++/* 2R: opção «buscar junto» no menu da busca geral (11/10/2026) */
++.toolbar-search-option.r2-sync-opt { display: flex; gap: 8px; align-items: flex-start; font-size: 11.5px; color: var(--text-secondary); white-space: normal; cursor: pointer; border-top: 1px solid var(--border-subtle, rgba(255,255,255,.08)); }
++.toolbar-search-option.r2-sync-opt input { margin-top: 2px; accent-color: #d8d9dc; }
++
++/* 2R: busca única maior (Tudo / Placa / PDF) e botão de temas — aprovado pelo Roger, 11/10/2026 */
++.toolbar-search-wrap.r2-search { align-self: center; display: flex; align-items: center; gap: 8px; height: 36px;
++  flex: 1 1 auto; min-width: 210px; max-width: 540px; margin: 0 6px; padding: 0 4px 0 11px; box-sizing: border-box;
++  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-secondary); }
++.toolbar-search-wrap.r2-search:focus-within { border-color: var(--r2-line-strong, var(--text-secondary)); box-shadow: 0 0 0 3px rgba(127,127,127,.12); }
++.r2-search .r2-search-ico { flex: 0 0 auto; color: var(--text-secondary); }
++.r2-search .toolbar-search { flex: 1 1 0; min-width: 40px !important; width: 0 !important; height: 100%; border: 0 !important; box-shadow: none !important;
++  background: transparent; padding: 0; font-size: 15px; }
++.r2-search .toolbar-search-dropdown { top: calc(100% + 6px); min-width: 100%; }
++.r2-search .r2-pin-drop { top: calc(100% + 6px); }
++.r2-seg { display: flex; gap: 2px; padding: 2px; flex: 0 0 auto; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 7px; }
++.r2-seg button { font: 600 12.5px inherit; font-family: inherit; padding: 3px 9px; border: 0; border-radius: 5px; background: transparent;
++  color: var(--text-secondary); cursor: pointer; }
++.r2-seg button:hover { color: var(--text-primary); }
++/* telas até ~1600px: barra mais justa para o logo e o botão de tema caberem */
++@media (max-width: 1600px) {
++  .toolbar-search-wrap.r2-search { margin: 0 3px; gap: 5px; }
++  .r2-seg button { padding: 3px 6px; font-size: 12px; }
++}
++@media (max-width: 1360px) { .r2-menubar.inline .r2-menu-title { padding: 4px 4px; } .nav2r-inline .nav2r-btn { padding: 3px 3px; } .nav2r-inline .nav2r-sep { margin: 0 1px; } .toolbar-search-wrap.r2-search { min-width: auto; } .r2-seg button { padding: 3px 5px; } .r2-toolbar-logo { display: none; } }
++.r2-seg button.on { background: var(--r2-bg2, var(--bg-tertiary)); color: var(--text-primary); }
++.r2-theme-btn { width: 36px; height: 36px; flex: 0 0 auto; align-self: center; margin-right: 6px; display: flex; align-items: center; justify-content: center;
++  border: 1px solid var(--border); border-radius: 9px; background: var(--bg-secondary); color: var(--text-primary); cursor: pointer; }
++.r2-theme-btn:hover, .r2-theme-btn.open { border-color: var(--r2-line-strong, var(--text-secondary)); }
++.r2-theme-pop { position: fixed; z-index: 3000; width: 270px; padding: 8px; border-radius: 12px; border: 1px solid var(--border);
++  background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 12px 32px rgba(0,0,0,.35); font-size: 13.5px; }
++.r2-theme-h { font-weight: 700; font-size: 14px; margin: 4px 6px 6px; }
++.r2-theme-g { margin: 8px 6px 4px; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: var(--text-secondary); }
++.r2-theme-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 8px;
++  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
++.r2-theme-row:hover { background: var(--r2-bg2, var(--bg-tertiary)); }
++.r2-theme-row.on { background: var(--r2-bg2, var(--bg-tertiary)); font-weight: 600; }
++.r2-theme-sw { width: 28px; height: 18px; border-radius: 5px; border: 1px solid var(--r2-line-strong, #5a5d64); position: relative; overflow: hidden; flex: 0 0 auto; }
++.r2-theme-sw i { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; }
++.r2-theme-ck { margin-left: auto; color: #2e9e5b; font-weight: 800; }
++.r2-theme-foot { margin: 8px 6px 2px; font-size: 12px; color: var(--text-secondary); }
++/* Ponto a ponto — programar os pontos (Roger, 11/10/2026) */
++.r2gd-prog { border:1px solid var(--r2-line,#2A2D33); border-radius:10px; padding:10px; margin:8px 0; background:var(--r2-bg2,#16181B); }
++.r2gd-progq { flex:1 1 120px; min-width:100px; background:var(--r2-bg0,#0B0C0E); color:var(--r2-text,#ECEAE4); border:1px solid var(--r2-line,#33373E); border-radius:8px; padding:7px 9px; font-size:13px; }
++/* Ponto a ponto — toggle lista/tabela e a tabela editável (Roger, 11/10/2026) */
++.r2gd-viewseg { display:flex; gap:3px; background:var(--r2-bg0,#0B0C0E); border:1px solid var(--r2-line,#33373E); border-radius:9px; padding:3px; margin:6px 0 10px; }
++.r2gd-viewseg button { flex:1; background:transparent; border:0; color:var(--r2-dim,#9AA0A6); font-weight:700; font-size:12.5px; padding:7px; border-radius:7px; cursor:pointer; }
++.r2gd-viewseg button.on { background:var(--r2-bg2,#23262B); color:var(--r2-text,#ECEAE4); box-shadow:inset 0 0 0 1px var(--r2-accent,#D4B26A); }
++.r2gd-tbl { border:1px solid var(--r2-line,#2A2D33); border-radius:10px; overflow:hidden; margin-top:6px; }
++.r2gd-thd,.r2gd-trow { display:grid; grid-template-columns:28px 1.4fr 0.9fr 0.9fr 28px; align-items:center; gap:6px; padding:7px 9px; }
++.r2gd-thd { background:var(--r2-bg2,#16181B); font-size:10.5px; font-weight:800; color:var(--r2-dim,#9AA0A6); letter-spacing:.3px; text-transform:uppercase; }
++.r2gd-trow { border-top:1px solid var(--r2-line,#1E2125); font-size:13px; }
++.r2gd-trow.out { background:rgba(224,134,74,.08); }
++.r2gd-tn { color:var(--r2-mute,#6E6E6A); font-variant-numeric:tabular-nums; }
++.r2gd-tname,.r2gd-tcert { background:var(--r2-bg0,#0B0C0E); color:var(--r2-text,#ECEAE4); border:1px solid var(--r2-line,#33373E); border-radius:6px; padding:5px 7px; font-size:12.5px; min-width:0; width:100%; }
++.r2gd-tcert { text-align:right; color:#7FD3A2; font-weight:700; }
++.r2gd-tmed { font-variant-numeric:tabular-nums; font-weight:700; text-align:right; }
++.r2gd-tmed.ok { color:#7FD3A2; } .r2gd-tmed.bad { color:#E0864A; }
++.r2gd-tstar { background:transparent; border:0; color:var(--r2-line,#3A3E45); font-size:16px; cursor:pointer; padding:0; }
++.r2gd-tstar.on { color:#2E9E5B; }
++.r2gd-tfoot { padding:9px; border-top:1px solid var(--r2-line,#1E2125); background:var(--r2-bg2,#121418); }
++/* Ponto a ponto — Relatório (padrão 2R: limpo, vermelho só para o que está fora) */
++.r2rep { margin-top:6px; }
++.r2rep-head { display:flex; align-items:flex-start; gap:10px; padding:4px 2px 12px; }
++.r2rep-ti { font-size:15px; font-weight:800; color:var(--r2-text,#ECEAE4); }
++.r2rep-sub { font-size:12px; color:var(--r2-dim,#9AA0A6); margin-top:2px; }
++.r2rep-sum { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; }
++.r2rep-chip { font-size:11.5px; font-weight:700; border:1px solid var(--r2-line,#33373E); color:var(--r2-dim,#9AA0A6); border-radius:12px; padding:3px 9px; white-space:nowrap; }
++.r2rep-chip.bad { border-color:#E0864A; color:#E0864A; }
++.r2rep-tbl { border:1px solid var(--r2-line,#2A2D33); border-radius:10px; overflow:hidden; }
++.r2rep-thd,.r2rep-row { display:grid; grid-template-columns:26px 1.3fr 0.9fr 0.8fr 0.8fr 0.7fr 0.8fr; align-items:center; gap:6px; padding:8px 10px; }
++.r2rep-thd { background:var(--r2-bg2,#16181B); font-size:10px; font-weight:800; color:var(--r2-dim,#9AA0A6); letter-spacing:.3px; text-transform:uppercase; }
++.r2rep-row { border-top:1px solid var(--r2-line,#1E2125); font-size:12.5px; }
++.r2rep-row.fora { background:rgba(224,134,74,.07); }
++.r2rep-n,.r2rep-pt { color:var(--r2-mute,#6E6E6A); font-variant-numeric:tabular-nums; }
++.r2rep-nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
++.r2rep-v { font-variant-numeric:tabular-nums; font-weight:700; }
++.r2rep-v.bad { color:#E0864A; }
++.r2rep-tp { color:var(--r2-dim,#9AA0A6); font-size:11.5px; }
++.r2rep-res { font-size:11px; font-weight:800; text-align:center; }
++.r2rep-res.ok { color:var(--r2-dim,#9AA0A6); }
++.r2rep-res.fora { color:#E0864A; }
++.r2rep-foot { display:flex; align-items:center; gap:10px; padding:11px 2px 4px; }
++.r2rep-saved { font-size:11.5px; color:var(--r2-dim,#9AA0A6); }
++.r2rep-print-head { display:none; }
++/* Impressão: folha branca, padrão 2R (logo + título, tabela preta e cinza, rodapé) */
++@media print {
++  body * { visibility:hidden !important; }
++  .r2rep, .r2rep * { visibility:visible !important; }
++  .r2rep { position:absolute; left:0; top:0; width:100%; margin:0; padding:24px 28px; background:#fff !important; color:#1a1a1a !important; }
++  .r2rep-print-head { display:block; border-bottom:2px solid #1F2933; padding-bottom:8px; margin-bottom:14px; }
++  .r2rep-print-head .b { font-size:20px; font-weight:900; letter-spacing:1px; color:#1F2933; }
++  .r2rep-print-head .b small { font-size:10px; letter-spacing:3px; color:#52606D; font-weight:700; }
++  .r2rep-ti,.r2rep-nm,.r2rep-v { color:#1a1a1a !important; }
++  .r2rep-sub,.r2rep-pt,.r2rep-tp,.r2rep-n { color:#52606D !important; }
++  .r2rep-chip { border-color:#B5B5B5 !important; color:#1F2933 !important; }
++  .r2rep-chip.bad { border-color:#C0392B !important; color:#C0392B !important; }
++  .r2rep-tbl { border-color:#B5B5B5 !important; }
++  .r2rep-thd { background:#E4E4E4 !important; color:#1F2933 !important; }
++  .r2rep-row { border-top-color:#DADFE6 !important; }
++  .r2rep-row.fora { background:#FBEAE6 !important; }
++  .r2rep-v.bad,.r2rep-res.fora { color:#C0392B !important; }
++  .r2rep-res.ok { color:#52606D !important; }
++  .r2rep-foot { display:none !important; }
++  .r2rep-saved,.r2acv-note { display:none !important; }
++}
+diff --git a/src/frontend/src/main.tsx b/src/frontend/src/main.tsx
+index 0a40c1e..b550876 100644
+--- a/src/frontend/src/main.tsx
++++ b/src/frontend/src/main.tsx
+@@ -1,4 +1,9 @@
+ import './polyfills';
++import { installPortuguese } from './r2/translate';
++import { installBridge } from './r2/bridge';
++import { installMeter } from './r2/meter-store';
++import { installCurves } from './r2/curves-store';
++import { installGuide } from './r2/guide-store';
+ // Must precede any renderer creation: swaps PixiJS's `new Function` uniform
+ // parsers for eval-free ones. Lets the hosted lite build's CSP drop
+ // 'unsafe-eval' (deploy/boardripper-web.htaccess) — the only reason it was there.
+@@ -21,10 +26,19 @@ if (!window.__brUnsupported) {
+   // Before React mounts: the page translator must not be able to crash it (#36).
+   installTranslateGuard();
+   installBrowserZoomBlock();
+-  startMcpBridgeIfEnabled();
++  // 2R: ponte MCP (IA na placa) desligada por enquanto — liga com __2rBeta.mcp (Roger, 10/10/2026)
++  { const w = window as unknown as { __2rAcervo?: unknown; __2rBeta?: Record<string, boolean> };
++    if (!w.__2rAcervo || w.__2rBeta?.mcp) startMcpBridgeIfEnabled(); }
+   initSessionStore();
+   installStaleBuildGuard();
+ 
++  // 2R Tools: dentro do app 2R (visual neutro, sem o aviso de atualização do BoardRipper)
++  if ((window as unknown as { __2rAcervo?: unknown }).__2rAcervo) document.documentElement.classList.add('r2');
++  installPortuguese();
++  installBridge();
++  installMeter();
++  installCurves();
++  installGuide();
+   createRoot(document.getElementById('root')!).render(
+     <StrictMode>
+       <RootErrorBoundary>
+diff --git a/src/frontend/src/panels/BoardViewerPanel.tsx b/src/frontend/src/panels/BoardViewerPanel.tsx
+index 850bfcd..8c431c3 100644
+--- a/src/frontend/src/panels/BoardViewerPanel.tsx
++++ b/src/frontend/src/panels/BoardViewerPanel.tsx
+@@ -1,4 +1,6 @@
+ import { useRef, useEffect, useState, useCallback, useSyncExternalStore } from 'react';
++import { BoardRealBackdrop } from '../components/CameraOverlay';
++import { useCameraOverlay } from '../store/camera-overlay';
+ import type { IDockviewPanelProps } from 'dockview-react';
+ import { BoardRenderer } from '../renderer/BoardRenderer';
+ import { boardStore } from '../store/board-store';
+@@ -288,6 +290,9 @@ export function BoardViewerPanel(props: IDockviewPanelProps<{ boardTabId?: numbe
+     bareAction,
+   };
+ 
++  const overlaySt = useCameraOverlay();
++  const pinsOnTop = overlaySt.on && overlaySt.mode === 'pins';
++
+   if (tabId == null) {
+     return (
+       <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888' }}>
+@@ -297,11 +302,14 @@ export function BoardViewerPanel(props: IDockviewPanelProps<{ boardTabId?: numbe
+   }
+ 
+   return (
+-    <div className="board-panel-root" ref={rootRef}>
++    <div className="board-panel-root" ref={rootRef} style={pinsOnTop ? { isolation: 'isolate' } : undefined}>
++      {/* 2R Tools: imagem real ATRÁS da placa no modo "Pinos por cima" */}
++      <BoardRealBackdrop />
+       <div
+         ref={containerRef}
+         className="board-panel-canvas"
+         data-testid="board-canvas"
++        style={pinsOnTop ? { opacity: overlaySt.pinsOpacity / 100 } : undefined}
+       />
+       {thisTab && !thisTab.board && (
+         <div className="board-loading-overlay">
+diff --git a/src/frontend/src/panels/PdfViewerPanel.tsx b/src/frontend/src/panels/PdfViewerPanel.tsx
+index bd654ed..d27d9ee 100644
+--- a/src/frontend/src/panels/PdfViewerPanel.tsx
++++ b/src/frontend/src/panels/PdfViewerPanel.tsx
+@@ -1,3 +1,6 @@
++import { IS_2R } from '../r2/env';
++import { mirrorToBoard, searchSyncOn } from '../r2/search-sync';
++import { createPortal } from 'react-dom';
+ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
+ import type { IDockviewPanelProps } from 'dockview-react';
+ import { usePdfDoc } from '../hooks/usePdfStore';
+@@ -626,6 +629,26 @@ function PageScrubber({ currentPage, pageCount, onGoToPage, scrubberRef }: {
+ }
+ 
+ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string }>) {
++  // 2R Tools (Roger, 10/10/2026): «subir os comandos uma barra e deixar todos do lado
++  // direito, assim fica alinhado os nomes dos arquivos e o início de cada item» — a barra
++  // do PDF vai para a linha das abas (à direita) e a página começa na altura da placa.
++  const viewerRootRef = useRef<HTMLDivElement | null>(null);
++  const [hdrSlot, setHdrSlot] = useState<HTMLElement | null>(null);
++  const [pdfVisible, setPdfVisible] = useState<boolean>(() => props.api.isVisible);
++  useEffect(() => {
++    const d = props.api.onDidVisibilityChange(e => setPdfVisible(e.isVisible));
++    return () => d.dispose();
++  }, [props.api]);
++  useEffect(() => {
++    if (!IS_2R) return;
++    // Roger (22:44): «todos esses itens na mesma barra onde tem o nome do PDF, mas para o
++    // lado direito» — nome do PDF à esquerda da aba, a barra do PDF à direita.
++    const g = viewerRootRef.current?.closest('.dv-groupview');
++    const slot = (g?.querySelector('.dv-right-actions-container') as HTMLElement | null) ?? null;
++    if (slot !== hdrSlot) setHdrSlot(slot);
++  });
++  const placeToolbar = (el: React.ReactElement) =>
++    (IS_2R && hdrSlot && pdfVisible ? createPortal(<div className="r2-pdf-hdr">{el}</div>, hdrSlot) : el);
+   const pdfFileName = props.params.pdfFileName ?? '';
+   const { isLoaded, textExtracting, textExtractProgress, pageCount, currentPage, rotation, pageMode, mirror, searchQuery, matches, activeMatchIndex, matchNavSeq, matchGroupCount, activeGroupIndex, isMultiTerm, isAtSyntax, multiTermYGap, multiTermXGap, bookmarks, cleanMode, parseGen, lookupHint, crossProbeHint } = usePdfDoc(pdfFileName);
+   /** Effective single-page layout: explicit single mode OR forced while rotated. */
+@@ -3611,10 +3634,30 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+     };
+     window.addEventListener('pdf-zoom', zoomHandler as EventListener);
+ 
++    // 2R: zoom do esquemático acompanha o zoom da placa (proporcional, no centro)
++    const bvZoomHandler = (ev: Event) => {
++      if (!props.api.isVisible) return;
++      const ratio = (ev as CustomEvent<{ ratio: number }>).detail?.ratio;
++      const containerEl = containerRef.current;
++      if (!ratio || !isFinite(ratio) || !containerEl || !wrapperRef.current) return;
++      const mid = { x: containerEl.clientWidth / 2, y: containerEl.clientHeight / 2 };
++      const minZoom = renderSettingsStore.settings.pdfEnableBoundaries ? 1 : 0.5;
++      const oldZ = zoomRef.current;
++      const newZ = Math.max(minZoom, Math.min(oldZ * ratio, 10));
++      const r = newZ / oldZ;
++      if (Math.abs(r - 1) < 1e-4) return;
++      panRef.current = { x: mid.x - r * (mid.x - panRef.current.x), y: mid.y - r * (mid.y - panRef.current.y) };
++      zoomRef.current = newZ;
++      syncTransform();
++      scheduleTierRender();
++    };
++    window.addEventListener('2r-bv-zoom', bvZoomHandler as EventListener);
++
+     return () => {
+       window.removeEventListener('pdf-fit-width', handler);
+       window.removeEventListener('pdf-pan', panHandler as EventListener);
+       window.removeEventListener('pdf-zoom', zoomHandler as EventListener);
++      window.removeEventListener('2r-bv-zoom', bvZoomHandler as EventListener);
+     };
+   }, [handleFitWidth, props.api, syncTransform, scheduleTierRender, flipPagesForPan]);
+ 
+@@ -3729,7 +3772,8 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+   }
+ 
+   return (
+-    <div className="pdf-viewer">
++    <div className="pdf-viewer" ref={viewerRootRef}>
++      {placeToolbar(
+       <div className="pdf-toolbar">
+         {/* Board/PDF linking moved to the dockview tab (∞ on the PDF tab) —
+             symmetric with the board tab. See components/PdfTab.tsx. */}
+@@ -3826,7 +3870,7 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+                 type="text"
+                 className="pdf-search-input"
+                 data-pdf-file={pdfFileName}
+-                placeholder="Search (multi-term: 10UF 25V)"
++                placeholder={IS_2R ? (searchSyncOn() ? 'Buscar no PDF (e junto na placa)…' : 'Buscar no PDF (vários termos: 10UF 25V)') : 'Search (multi-term: 10UF 25V)'}
+                 title="Enter / ↓ / Cmd+F — next match. Shift+Enter / ↑ / Shift+Cmd+F — previous match."
+                 defaultValue={searchQuery}
+                 // On focus the whole list shows whatever the field holds (Preview's
+@@ -3878,6 +3922,7 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+                       return;
+                     }
+                     pdfStore.searchText(value);
++                    mirrorToBoard(value);          // 2R: busca junto na placa
+                     navHintShownRef.current = false;
+                   }
+                 }}
+@@ -4035,6 +4080,7 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+           </button>
+         </div>
+       </div>
++      )}
+ 
+       {textExtracting && (
+         <div className="pdf-text-extract-bar" title={`Indexing text: ${Math.round(textExtractProgress * 100)}%`}>
+diff --git a/src/frontend/src/panels/SettingsPanel.tsx b/src/frontend/src/panels/SettingsPanel.tsx
+index bf5edc7..e30a543 100644
+--- a/src/frontend/src/panels/SettingsPanel.tsx
++++ b/src/frontend/src/panels/SettingsPanel.tsx
+@@ -1,3 +1,4 @@
++import { IS_2R } from '../r2/env';
+ import { useState, useCallback, useRef, useMemo, useEffect, useSyncExternalStore, createContext, useContext } from 'react';
+ import { setWatermarkTerms } from '../store/pdf-filter-actions';
+ import { IconPalette, IconLayoutBoardSplit, IconKeyboard, IconBooks, IconSettings, IconPlug, IconClick } from '@tabler/icons-react';
+@@ -76,8 +77,12 @@ type SectionId = MockupSectionId | 'zoomLod' | 'netLines' | 'navigation' | 'perf
+ 
+ export type SettingsTabId = 'theme' | 'board' | 'input' | 'library' | 'system' | 'integrations';
+ 
++// 2R Tools (Roger, 10/10/2026): integração MCP (IA na placa) fica oculta por enquanto — o
++// código continua aqui, pronto; liga com window.__2rBeta.mcp = true quando a ponte existir.
++const MCP_2R = typeof window !== 'undefined' && !!(window as unknown as { __2rBeta?: Record<string, boolean> }).__2rBeta?.mcp;
+ const TAB_ORDER: SettingsTabId[] = (['theme', 'board', 'input', 'library', 'system', 'integrations'] as SettingsTabId[])
+-  .filter(t => !(isLiteBuild() && (t === 'library' || t === 'integrations')));
++  .filter(t => !(isLiteBuild() && (t === 'library' || t === 'integrations')))
++  .filter(t => !(IS_2R && t === 'integrations' && !MCP_2R));
+ 
+ const TAB_ICONS: Record<SettingsTabId, typeof IconPalette> = {
+   theme:        IconPalette,
+@@ -1781,6 +1786,13 @@ export function SettingsPanel() {
+   );
+   const [previewing, setPreviewing] = useState(false);
+   const [dirty, setDirty] = useState(false);
++  // 2R Tools (Roger, 10/10/2026): «alterar em tempo real cada barra dessa, para saber de
++  // onde é» — no 2R cada mudança aparece na placa na hora (Apply grava, Cancelar volta).
++  useEffect(() => {
++    if (!IS_2R || !dirty) return;
++    renderSettingsStore.applySettings(draft);
++    setPreviewing(true);
++  }, [draft, dirty]);
+   const previewingRef = useRef(previewing);
+   previewingRef.current = previewing;
+ 
+@@ -1870,6 +1882,15 @@ export function SettingsPanel() {
+     window.addEventListener('settings-focus-section', onFocus);
+     return () => window.removeEventListener('settings-focus-section', onFocus);
+   }, [focusSection]);
++  // 2R Tools: o menu de cima abre uma aba dos Ajustes (ex.: Tema)
++  useEffect(() => {
++    const onTab = (e: Event) => {
++      const t = (e as CustomEvent<string>).detail as SettingsTabId;
++      if (TAB_ORDER.includes(t)) setActiveTab(t);
++    };
++    window.addEventListener('settings-open-tab', onTab);
++    return () => window.removeEventListener('settings-open-tab', onTab);
++  }, [setActiveTab]);
+ 
+   const updateDraft: DraftUpdater = useCallback((partial) => {
+     setDraft(prev => {
+@@ -2029,13 +2050,13 @@ export function SettingsPanel() {
+                 by toggling SHOW_MOCKUP_PREVIEW to true. */}
+             {SHOW_MOCKUP_PREVIEW && <SettingsMockup settings={draft} onElementClick={focusSection} />}
+             <div className="settings-footer">
+-              <button
++              {IS_2R ? <span className="r2-live-hint">{dirty ? '● ao vivo na placa' : 'mexa: muda na placa na hora'}</span> : <button
+                 className={`settings-action-btn ${previewing ? 'active' : ''}`}
+                 onClick={handlePreview} disabled={!dirty}
+                 title={previewing ? 'Stop preview, revert board to saved' : 'Preview changes on the board'}
+               >
+                 {previewing ? 'Stop Preview' : 'Preview'}
+-              </button>
++              </button>}
+               <button className="settings-action-btn settings-apply-btn" onClick={handleApply} disabled={!dirty}>Apply</button>
+               <button className="settings-action-btn" onClick={handleCancel} disabled={!dirty}>Cancel</button>
+             </div>
+diff --git a/src/frontend/src/panels/ToolsPanel.tsx b/src/frontend/src/panels/ToolsPanel.tsx
+index b73380e..9cc783d 100644
+--- a/src/frontend/src/panels/ToolsPanel.tsx
++++ b/src/frontend/src/panels/ToolsPanel.tsx
+@@ -1,5 +1,5 @@
+ import { useDatabank } from '../hooks/useDatabank';
+-import { ensureDatabaseEditorPanel } from '../store/dockview-api';
++import { ensureDatabaseEditorPanel, ensureMicroscopePanel } from '../store/dockview-api';
+ import { ResistorColorTool } from './tools/ResistorColorTool';
+ import { SmdResistorTool } from './tools/SmdResistorTool';
+ import { CapacitorTool } from './tools/CapacitorTool';
+@@ -97,6 +97,17 @@ export function ToolsPanel() {
+           <span className="tools-entry-status">opens panel</span>
+         </button>
+       )}
++      <button
++        className="tools-entry"
++        data-testid="tools-entry-microscope"
++        onClick={ensureMicroscopePanel}
++      >
++        <span className="tools-entry-text">
++          Microscópio
++          <small>câmera USB ao lado da placa (split)</small>
++        </span>
++        <span className="tools-entry-status">opens panel</span>
++      </button>
+       <div className="tools-entry tools-entry-soon" aria-disabled="true">
+         <span className="tools-entry-text">Wiki</span>
+         <span className="tools-entry-status">soon</span>
+diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
+index 33ac7c3..de0b584 100644
+--- a/src/frontend/src/renderer/BoardRenderer.ts
++++ b/src/frontend/src/renderer/BoardRenderer.ts
+@@ -73,6 +73,7 @@ import { fileInputRefs } from '../store/file-inputs';
+ import { obdNetIndex, obdBoardNumberFor, obdStore } from '../store/obd-store';
+ import { primaryDiodeReading, boardHasDiodeData, formatDiode } from '../store/diode-readings';
+ import { stepExpApproach, ZOOM_TWEEN_RATE } from './smooth-zoom';
++import { isPinsOnTop, subscribeCameraOverlay } from '../store/camera-overlay';
+ 
+ // Alias for local use — all colour references go through board-scene.ts
+ const COLORS = BOARD_COLORS;
+@@ -350,6 +351,42 @@ const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(naviga
+ /** What `BoardRenderer.onViewChange` listeners receive. */
+ export interface ViewChange { userPan: boolean; dx: number; dy: number }
+ 
++/** 2R: velocidade do trackpad (Roger: «deixar um pouco mais rápido, ou ter a opção de
++ *  regular a velocidade») — padrão 1,4× ao arrastar e 1,4× na pinça. */
++function trackpadSpeed(): { pan: number; zoom: number } {
++  try {
++    const pan = parseFloat(localStorage.getItem('2r-trackpad-pan') || '1.4');
++    const zoom = parseFloat(localStorage.getItem('2r-trackpad-zoom') || '1.4');
++    return { pan: isFinite(pan) ? pan : 1.4, zoom: isFinite(zoom) ? zoom : 1.4 };
++  } catch { return { pan: 1.4, zoom: 1.4 }; }
++}
++
++/** 2R: aparelho de apontar (Roger, 11/10/2026: «adequar para mouse e trackpad no Windows»).
++ *  'auto' = descobre pelo jeito do giro (roda de mouse dá saltos; trackpad desliza),
++ *  'mouse' = roda sempre amplia/reduz, 'trackpad' = dois dedos sempre arrastam. */
++function pointerMode(): 'auto' | 'mouse' | 'trackpad' {
++  try {
++    const v = localStorage.getItem('2r-pointer-mode');
++    return v === 'mouse' || v === 'trackpad' ? v : 'auto';
++  } catch { return 'auto'; }
++}
++/** 2R: inverter a roda do mouse / os dois dedos (Roger: «padrão Win / padrão Mac»). */
++function invertFlag(k: '2r-mouse-invert' | '2r-pan-invert'): number {
++  try { return localStorage.getItem(k) === '1' ? -1 : 1; } catch { return 1; }
++}
++function mouseZoomSpeed(): number {
++  try { const n = parseFloat(localStorage.getItem('2r-mouse-zoom') || '1'); return isFinite(n) && n > 0 ? n : 1; }
++  catch { return 1; }
++}
++
++/** 2R: trackpad direto (padrão ligado; Preferências › Uso › Trackpad). */
++function trackpadDirect(): boolean {
++  try {
++    if (!(window as unknown as { __2rAcervo?: unknown }).__2rAcervo) return false;
++    return localStorage.getItem('2r-trackpad-direto') !== '0';
++  } catch { return false; }
++}
++
+ export class BoardRenderer {
+   /** Whether top layer should be visible (accounts for butterfly mode) */
+   private get isTopVisible() { return boardStore.showTop || boardStore.butterfly; }
+@@ -450,6 +487,9 @@ export class BoardRenderer {
+   private unsubscribeSettings: (() => void) | null = null;
+   private unsubscribeResizeMode: (() => void) | null = null;
+   private unsubscribeTheme: (() => void) | null = null;
++  /** 2R Tools: modo "Pinos por cima" da função Mesclar */
++  private unsubscribeCamOverlay: (() => void) | null = null;
++  private pinsOnTop = false;
+   private unsubscribeViewCommands: (() => void) | null = null;
+   private unsubscribeSelectionSet: (() => void) | null = null;
+   private unsubscribePartCompare: (() => void) | null = null;
+@@ -1081,7 +1121,15 @@ export class BoardRenderer {
+         }
+         this.viewPanX = vp.x;
+         this.viewPanY = vp.y;
+-        this.viewPoseScale = Math.abs(vp.scale.x);
++        // 2R (Roger, 11/10/2026): «conforme eu der zoom no BDV, dar zoom no esquemático»
++        // — só o zoom do técnico (não os pulos animados); desliga em Preferências.
++        const newScale = Math.abs(vp.scale.x);
++        if (!animMoved && !this.programmaticMove && this.viewPoseScale > 0 && newScale !== this.viewPoseScale) {
++          let on = true;
++          try { on = localStorage.getItem('2r-sync-zoom') !== '0'; } catch { /* */ }
++          if (on) window.dispatchEvent(new CustomEvent('2r-bv-zoom', { detail: { ratio: newScale / this.viewPoseScale } }));
++        }
++        this.viewPoseScale = newScale;
+         if (animMoved || this.programmaticMove) {
+           this.programmaticMove = false;
+           if (this.viewSettleTimer) { clearTimeout(this.viewSettleTimer); this.viewSettleTimer = null; }
+@@ -1588,6 +1636,9 @@ export class BoardRenderer {
+     try {
+       await this.app.init({
+         background: COLORS.background,
++      // 2R Tools: contexto com canal alpha p/ o modo "Pinos por cima" (o fundo
++      // volta a 1 logo após o init em applyBackgroundAlpha)
++      backgroundAlpha: 0.99,
+         width: this.containerEl.clientWidth || 1,
+         height: this.containerEl.clientHeight || 1,
+         antialias: boardAntialias(renderSettingsStore.settings.touchPerformanceMode, renderSettingsStore.settings.boardAntialiasing),
+@@ -1758,6 +1809,7 @@ export class BoardRenderer {
+     // Sync with current store state (applies layer visibility, selection, etc.)
+     this.onBoardUpdate();
+ 
++    this.applyBackgroundAlpha();
+     log.render.log(`reinitApp COMPLETE tab=${this.tabId} board=${savedBoard ? savedBoard.format : 'null'} tickerStarted=${this.app.ticker.started} scene=${this.activeScene ? 'yes' : 'null'}`);
+   }
+ 
+@@ -1766,6 +1818,9 @@ export class BoardRenderer {
+     try {
+     await this.app.init({
+       background: COLORS.background,
++      // 2R Tools: contexto com canal alpha p/ o modo "Pinos por cima" (o fundo
++      // volta a 1 logo após o init em applyBackgroundAlpha)
++      backgroundAlpha: 0.99,
+       width: this.containerEl.clientWidth,
+       height: this.containerEl.clientHeight,
+       antialias: boardAntialias(renderSettingsStore.settings.touchPerformanceMode, renderSettingsStore.settings.boardAntialiasing),
+@@ -1785,6 +1840,8 @@ export class BoardRenderer {
+       return;
+     }
+     if (this.tabId !== null) { registerRenderer(this.tabId, this.app); navHistoryStore.registerBoardCamera(this.tabId, this.navCamera); }
++    this.pinsOnTop = isPinsOnTop();
++    this.applyBackgroundAlpha();
+     this.containerEl.appendChild(this.app.canvas as HTMLCanvasElement);
+     this.initialized = true;
+ 
+@@ -2370,6 +2427,9 @@ export class BoardRenderer {
+       if (this.app && !this.contextLost && !this.reinitializing) this.app.render();
+     });
+     this.unsubscribeTheme = themeStore.subscribe(() => this.onThemeUpdate());
++    this.unsubscribeCamOverlay = subscribeCameraOverlay(() => this.onCamOverlayUpdate());
++    this.pinsOnTop = isPinsOnTop();
++    this.applyBackgroundAlpha();
+     this.unsubscribeObd = obdStore.subscribe(() => this.onObdUpdate());
+     this.unsubscribeSelectionSet = selectionSetStore.subscribe(() => {
+       this.redrawMultiHighlight();
+@@ -2395,6 +2455,9 @@ export class BoardRenderer {
+         this.panView(payload as PanDirection);
+       } else if (cmd === 'zoom') {
+         this.zoomKeyboard(payload as ZoomDirection);
++      } else if (cmd === 'fit') {
++        this.fitToBoard();
++        this.noteFitViewpoint();
+       }
+     });
+ 
+@@ -2993,6 +3056,21 @@ export class BoardRenderer {
+     scene.bottomOutlineLayer.visible = showComponents && showOutlines;
+     scene.topLabelLayer.visible      = showComponents && showLabels;
+     scene.bottomLabelLayer.visible   = showComponents && showLabels;
++    // 2R Tools — "Pinos por cima": tira o fundo da boardview (fica só pino/net/código/leitura)
++    const bare = this.pinsOnTop;
++    scene.outlineGfx.visible = !bare;
++    if (bare) {
++      scene.topFillLayer.visible = false;
++      scene.bottomFillLayer.visible = false;
++      if (scene.traceLayer) scene.traceLayer.visible = false;
++      if (scene.surfacesLayer) scene.surfacesLayer.visible = false;
++      if (scene.viaLayer) scene.viaLayer.visible = false;
++      if (scene.silkscreenLayer) scene.silkscreenLayer.visible = false;
++      if (scene.silkscreenTop) scene.silkscreenTop.visible = false;
++      if (scene.silkscreenBottom) scene.silkscreenBottom.visible = false;
++      if (scene.copperDropsTop) scene.copperDropsTop.visible = false;
++      if (scene.copperDropsBottom) scene.copperDropsBottom.visible = false;
++    }
+   }
+ 
+   // --- Flip management ---
+@@ -3962,8 +4040,12 @@ export class BoardRenderer {
+         // honouring 'keep'/'auto' would centre it without unzooming and leave
+         // most pins off-screen. Force a fit (snap) for nets; parts still obey
+         // the user's navZoomMode.
+-        const zoomMode = isNet ? 'always' : s.navZoomMode;
+-        this.zoomToBounds(focus.bounds, focusRoot, target, { zoomMode });
++        const zoomMode = focus.zoomMode ?? (isNet ? 'always' : s.navZoomMode);
++        this.zoomToBounds(focus.bounds, focusRoot, target, { zoomMode, scale: focus.scale });
++        if (focus.rememberZoom) {       // 2R: Sequência de start lembra o último zoom
++          const mag = focus.scale ?? Math.abs(this.viewport.scale.x);
++          try { if (mag > 0) localStorage.setItem('2r-seq-zoom', String(mag)); } catch { /* */ }
++        }
+         // Preview navigation (net tree, single click) deliberately leaves the
+         // selection alone, so the blink would draw attention to the previous
+         // subject instead of the part we just flew to.
+@@ -4196,7 +4278,7 @@ export class BoardRenderer {
+     bounds: { minX: number; minY: number; maxX: number; maxY: number },
+     root?: Container,
+     viewFraction = 0.25,
+-    options: { zoomMode?: 'auto' | 'keep' | 'always' } = {},
++    options: { zoomMode?: 'auto' | 'keep' | 'always'; scale?: number } = {},
+   ) {
+     const bw = bounds.maxX - bounds.minX;
+     const bh = bounds.maxY - bounds.minY;
+@@ -4217,7 +4299,9 @@ export class BoardRenderer {
+ 
+     const mode = options.zoomMode ?? 'always';
+     const currentMag = Math.abs(this.viewport.scale.x);
+-    if (mode === 'keep' && currentMag > 0) {
++    if (options.scale && options.scale > 0) {
++      targetMag = options.scale;          // 2R: zoom exato guardado
++    } else if (mode === 'keep' && currentMag > 0) {
+       // Never change zoom — just pan to the part's center.
+       targetMag = currentMag;
+     } else if (mode === 'auto' && currentMag > 0) {
+@@ -4500,6 +4584,33 @@ export class BoardRenderer {
+       // the smooth wheel zoom (2026-07-19) is every zoom-bound and modifier
+       // wheel: the board took the zoom and drew nothing (regression of #6).
+       this.boundWheelWake?.(e);
++      // 2R Tools (Roger, 10/10/2026: «o trackpad da Apple está meio garrado»): no app 2R o
++      // trackpad vai direto — pinça amplia/reduz na hora, proporcional ao gesto, e dois
++      // dedos arrastam sem a suavização por quadros do pixi-viewport (o macOS já dá a inércia).
++      if (trackpadDirect() && !e.metaKey && !e.shiftKey) {
++        const sp = trackpadSpeed();
++        const pm = pointerMode();
++        const isMouse = !e.ctrlKey && (pm === 'mouse' || (pm === 'auto' && looksLikeMouseWheel(e)));
++        if (isMouse) {
++          // roda do mouse: amplia/reduz em volta do ponteiro (padrão do Windows e do FlexBV)
++          this.zoomAtScreen(e.offsetX, e.offsetY, (e.deltaY || e.deltaX) * invertFlag('2r-mouse-invert'), true, WHEEL_DIVISOR / mouseZoomSpeed());
++        } else if (e.ctrlKey) {
++          const f = Math.exp(-Math.max(-60, Math.min(60, e.deltaY)) * 0.011 * sp.zoom);
++          this.setScaleAtScreen(e.offsetX, e.offsetY, this.viewport.scale.x * f);
++        } else if (renderSettingsStore.settings.twoFingerPan && e.deltaMode === 0) {
++          const inv = invertFlag('2r-pan-invert');
++          this.viewport.x -= e.deltaX * sp.pan * inv;
++          this.viewport.y -= e.deltaY * sp.pan * inv;
++        } else {
++          return;
++        }
++        this.viewport.emit('moved', { viewport: this.viewport, type: 'wheel' });
++        this.needsRender = true;
++        this.netLinesDirty = true;
++        e.preventDefault();
++        e.stopPropagation();
++        return;
++      }
+       if (e.ctrlKey) return;
+ 
+       const s = renderSettingsStore.settings;
+@@ -5024,10 +5135,30 @@ export class BoardRenderer {
+     }
+   }
+ 
++  /** 2R Tools — Mesclar / "Pinos por cima": fundo do canvas transparente e
++   *  corpos, contorno da placa, cobre, trilhas, vias e serigrafia escondidos,
++   *  sobrando pinos, nets, códigos dos componentes e leituras sobre a imagem real. */
++  private applyBackgroundAlpha(): void {
++    if (this.app && this.app.renderer) {
++      this.app.renderer.background.alpha = this.pinsOnTop ? 0 : 1;
++    }
++  }
++
++  private onCamOverlayUpdate(): void {
++    const next = isPinsOnTop();
++    if (next === this.pinsOnTop) return;
++    this.pinsOnTop = next;
++    this.applyBackgroundAlpha();
++    if (this.activeScene) this.applyLayerVisibility(this.activeScene);
++    this.needsRender = true;
++    if (this.app && this.app.renderer && !this.contextLost && !this.reinitializing) this.app.render();
++  }
++
+   private onThemeUpdate(): void {
+     const board = themeStore.activeTheme().board;
+     if (this.app && this.app.renderer) {
+       this.app.renderer.background.color = hexToInt(board.canvasBackground);
++      this.applyBackgroundAlpha();
+     }
+     // A theme change alters BOARD_COLORS (outline / selection / pin+net+part
+     // label colours, board fill) even when NO render-setting changed — and the
+@@ -8140,6 +8271,7 @@ export class BoardRenderer {
+     this.unsubscribeSettings?.();
+     this.unsubscribeResizeMode?.();
+     this.unsubscribeTheme?.();
++    this.unsubscribeCamOverlay?.();
+     this.unsubscribeObd?.();
+     this.unsubscribeViewCommands?.();
+     this.unsubscribeSelectionSet?.();
+diff --git a/src/frontend/src/renderer/board-scene.ts b/src/frontend/src/renderer/board-scene.ts
+index 4fc4daa..6ffe96b 100644
+--- a/src/frontend/src/renderer/board-scene.ts
++++ b/src/frontend/src/renderer/board-scene.ts
+@@ -33,6 +33,7 @@ import {
+   resolvePinColor,
+   quantizeFontSize,
+   resolvePartTypeOverride,
++  resolvePartType,
+   applyBodyShapeOverride,
+   isOutlineOnlyNet,
+ } from '../store/render-settings';
+@@ -1275,6 +1276,8 @@ export function buildBoardScene(
+     if (userOverride?.hidden) continue;
+     const skipFill = userOverride?.sendToBack === true
+       || (s.autoMarkMechanical && part.mechanical === true);
++    // 2R: grupo em «só os pads» — sem corpo, contorno e nome; os pads continuam
++    const padsOnly = resolvePartType(part.name, s)?.padsOnly === true;
+ 
+     // Push helper: adds a pin label to both the flat side-array and the
+     // per-part index (used by the renderer to un-dim selected parts).
+@@ -1877,14 +1880,14 @@ export function buildBoardScene(
+       // shields/heatsinks as nothing but the pin placeholders, and a giant
+       // border outline on a DIMM-shadow or shield frame is still visually
+       // dominant. Pins (drawn above as small circles) keep the part findable.
+-      if (!skipFill) {
++      if (!skipFill && !padsOnly) {
+         const batch = part.placementInferred
+           ? (isBottom ? bottomInferredBatch : topInferredBatch)
+           : (isBottom ? bottomBorderBatch : topBorderBatch);
+         batch.rects.push(borderRect);
+       }
+ 
+-      if (s.showComponentColors && override?.color && !skipFill) {
++      if (s.showComponentColors && override?.color && !skipFill && !padsOnly) {
+         const fillColor = parseInt(override.color.replace('#', ''), 16);
+         const map = isBottom ? bottomFillMap : topFillMap;
+         let gfx = map.get(fillColor);
+@@ -1910,7 +1913,7 @@ export function buildBoardScene(
+     // reading exists": 574 of those 2346 pins carry one, and leaving the other
+     // 1772 named would make visible text ambiguous (is `N1530_1` a designator
+     // or a measurement?) and read as a bug rather than a rule.
+-    if (s.showPartLabels && !(diodeOnly && isSinglePin)) {
++    if (s.showPartLabels && !padsOnly && !(diodeOnly && isSinglePin)) {
+       let fontSize: number;
+       if (isSinglePin) {
+         // Size against the pad, not the zero-width `eb`. Same fit formula the
+diff --git a/src/frontend/src/store/board-store.ts b/src/frontend/src/store/board-store.ts
+index a56ad61..3883f35 100644
+--- a/src/frontend/src/store/board-store.ts
++++ b/src/frontend/src/store/board-store.ts
+@@ -18,6 +18,7 @@ import { deriveBoardView } from './derive-board-view';
+ import { navHistoryStore } from './nav-history-store';
+ import type { NavCause } from './nav-history';
+ import type { FoldMode } from './derive-board-view';
++import { looseMatch } from '../r2/loose-match';
+ 
+ 
+ export interface SelectionState {
+@@ -203,6 +204,12 @@ export interface FocusRequest {
+    *  so blinking would draw attention to the *previous* subject rather than
+    *  the part being previewed. */
+   blink?: boolean;
++  /** 2R Tools: força o modo de zoom deste pedido ('keep' = só centraliza). */
++  zoomMode?: 'auto' | 'keep' | 'always';
++  /** 2R Tools: escala exata (zoom guardado da Sequência de start). */
++  scale?: number;
++  /** 2R Tools: guardar o zoom em uso depois de chegar (Sequência de start). */
++  rememberZoom?: boolean;
+ }
+ 
+ const emptySelection: SelectionState = {
+@@ -526,6 +533,23 @@ function syntheticRevisionFromBoard(b: BoardData): BoardRevision {
+ }
+ 
+ function loadViewPrefs(): ViewPrefs {
++  // 2R Tools (Roger, 10/10/2026): «deixar as linhas sempre visíveis por padrão» —
++  // liga as linhas das nets (corrente) uma vez; quem desligar depois continua desligado.
++  try {
++    const in2r = typeof window !== 'undefined' && !!(window as unknown as { __2rAcervo?: unknown }).__2rAcervo;
++    if (in2r && localStorage.getItem('2r-netlines-default') !== '1') {
++      localStorage.setItem('2r-netlines-default', '1');
++      const cur = JSON.parse(localStorage.getItem(VIEW_PREFS_KEY) || '{}');
++      localStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({ ...cur, netLineMode: 'chain' }));
++    }
++    // «essa função de escurecer a tela quando seleciono um componente é horrível, desabilita
++    // isso… deixa só um contorno no componente» (Roger, 10/10/2026, 22:41)
++    if (in2r && localStorage.getItem('2r-dim-off') !== '1') {
++      localStorage.setItem('2r-dim-off', '1');
++      const cur = JSON.parse(localStorage.getItem(VIEW_PREFS_KEY) || '{}');
++      localStorage.setItem(VIEW_PREFS_KEY, JSON.stringify({ ...cur, dimMode: 'off' }));
++    }
++  } catch { /* */ }
+   try {
+     const raw = localStorage.getItem(VIEW_PREFS_KEY);
+     if (raw) {
+@@ -2350,8 +2374,8 @@ class BoardStore extends Emitter {
+     const indices = new Set<number>();
+     for (let i = 0; i < board.parts.length; i++) {
+       const p = board.parts[i];
+-      if (p.name.toLowerCase().includes(ql) ||
+-          p.pins.some(pin => pin.net.toLowerCase().includes(ql))) {
++      if (looseMatch(p.name, ql) ||
++          p.pins.some(pin => looseMatch(pin.net, ql))) {
+         results.push(p);
+         indices.add(i);
+       }
+@@ -2377,8 +2401,8 @@ class BoardStore extends Emitter {
+     if (!tab?.board || !tab.searchQuery) return [];
+     const ql = tab.searchQuery.toLowerCase();
+     return tab.board.parts.filter(p =>
+-      p.name.toLowerCase().includes(ql) ||
+-      p.pins.some(pin => pin.net.toLowerCase().includes(ql))
++      looseMatch(p.name, ql) ||
++      p.pins.some(pin => looseMatch(pin.net, ql))
+     );
+   }
+ 
+@@ -2441,6 +2465,29 @@ class BoardStore extends Emitter {
+     return true;
+   }
+ 
++  /** 2R Tools (Roger, 11/10/2026): Sequência de start — vai até o PINO sem mexer
++   *  no zoom que o técnico escolheu (só centraliza). `scale` aplica um zoom guardado. */
++  focusPinKeepZoom(partIndex: number, pinIndex: number, scale?: number) {
++    this._clearPreviewPulse();
++    const tab = this.activeTab;
++    if (!tab?.board) return;
++    const part = viewPart(tab, partIndex) ?? tab.board.parts[partIndex];
++    const pin = part?.pins[pinIndex];
++    if (!part || !pin) return;
++    if (!tab.butterfly) {
++      if (part.side === 'top' && !tab.showTop) this.updateActiveTab({ showTop: true, showBottom: false });
++      else if (part.side === 'bottom' && !tab.showBottom) this.updateActiveTab({ showTop: false, showBottom: true });
++    }
++    const r = Math.max(pin.radius || 0, 1);
++    this.selectPin(partIndex, pinIndex, { cause: 'search' } as never);
++    this._focusRequest = {
++      partIndex,
++      bounds: { minX: pin.position.x - r, minY: pin.position.y - r, maxX: pin.position.x + r, maxY: pin.position.y + r },
++      zoomMode: scale ? 'always' : 'keep', scale, rememberZoom: true,
++    };
++    this.notify();
++  }
++
+   focusPart(name: string, nav?: NavOpts) {
+     this._clearPreviewPulse();
+     const tab = this.activeTab;
+diff --git a/src/frontend/src/store/cross-target-search.ts b/src/frontend/src/store/cross-target-search.ts
+index edbacb5..9ed21d5 100644
+--- a/src/frontend/src/store/cross-target-search.ts
++++ b/src/frontend/src/store/cross-target-search.ts
+@@ -10,6 +10,7 @@ import { navHistoryStore } from './nav-history-store';
+ import { pdfStore } from './pdf-store';
+ import { fileInputRefs } from './file-inputs';
+ import { openBoardSearch } from '../panels/board-viewer-bridge';
++import { looseMatch } from '../r2/loose-match';
+ 
+ /**
+  * Count substring (case-insensitive) matches of `term` across the given
+@@ -26,10 +27,10 @@ export function countInBoardTab(term: string, tabId: number): number {
+ 
+   let count = 0;
+   for (const p of tab.board.parts) {
+-    if (p.name.toLowerCase().includes(t)) count++;
++    if (looseMatch(p.name, t)) count++;
+   }
+   for (const [name] of tab.board.nets) {
+-    if (name.toLowerCase().includes(t)) count++;
++    if (looseMatch(name, t)) count++;
+   }
+   return count;
+ }
+diff --git a/src/frontend/src/store/dockview-api.ts b/src/frontend/src/store/dockview-api.ts
+index f942df4..5e03796 100644
+--- a/src/frontend/src/store/dockview-api.ts
++++ b/src/frontend/src/store/dockview-api.ts
+@@ -312,6 +312,30 @@ export function ensureWorklistPanel(): void {
+   }
+ }
+ 
++export function microscopePanelId(): string { return 'microscope-panel'; }
++
++/** Abre o painel do Microscópio dividindo a tela: metade placa, metade câmera. */
++export function ensureMicroscopePanel(): void {
++  try {
++    const api = getDockviewApi();
++    if (!api) return;
++    const id = microscopePanelId();
++    const existing = api.getPanel(id);
++    if (existing) { existing.api.setActive(); return; }
++    const anyBoard = api.panels.find(p => p.id.startsWith('board-'));
++    api.addPanel({
++      id,
++      component: 'microscope',
++      title: 'Microscópio',
++      ...(anyBoard
++        ? { position: { referencePanel: anyBoard.id, direction: 'right' as const } }
++        : {}),
++    });
++  } catch (err) {
++    log.ui.error('Failed to open Microscope panel:', err);
++  }
++}
++
+ export function ensurePdfPanel(fileName: string): void {
+   (async () => {
+     try {
+@@ -425,3 +449,69 @@ export function ensureDatabaseEditorPanel(): void {
+     log.ui.error('Failed to open Database Editor panel:', err);
+   }
+ }
++
++// ── 2R Tools: dividir a tela (placa / PDF / microscópio) ─────────────────
++export type SplitLayout = 'board' | 'board-pdf' | 'board-mic' | 'pdf-mic' | 'board-pdf-mic';
++
++export const SPLIT_LABELS: Record<SplitLayout, string> = {
++  'board': 'Só a placa',
++  'board-pdf': 'Placa | PDF',
++  'board-mic': 'Placa | Microscópio',
++  'pdf-mic': 'PDF | Microscópio',
++  'board-pdf-mic': 'Placa | PDF | Microscópio',
++};
++
++/** Arruma os painéis lado a lado conforme a escolha do técnico. Abre o PDF
++ *  ligado à placa e o microscópio quando a escolha pede e eles não estão abertos. */
++export function applySplitLayout(layout: SplitLayout, _retry = 0): void {
++  try {
++    const api = getDockviewApi();
++    if (!api) return;
++    if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
++    const tab = boardStore.activeTab;
++    const board = (tab ? api.getPanel(boardPanelId(tab.id)) : undefined)
++      ?? api.panels.find(p => p.id.startsWith('board-'));
++    const pdfName = tab?.pdfFileNames?.[0];
++    const wantsPdf = layout.includes('pdf');
++    const wantsMic = layout.includes('mic');
++    let pdf = pdfName ? api.getPanel(pdfPanelId(pdfName)) : api.panels.find(p => p.id.startsWith('pdf-'));
++    if (wantsPdf && !pdf) {
++      if (!pdfName) { boardStore.addToast('Nenhum PDF aberto com esta placa.', 'info'); return; }
++      ensurePdfPanel(pdfName);
++      if (_retry < 5) setTimeout(() => applySplitLayout(layout, _retry + 1), 250);
++      return;
++    }
++    let mic = api.getPanel(microscopePanelId());
++    if (wantsMic && !mic) {
++      ensureMicroscopePanel();
++      mic = api.getPanel(microscopePanelId());
++    }
++    if (!wantsMic && mic) { mic.api.close(); mic = undefined; }
++    if (layout !== 'pdf-mic' && !board) { boardStore.addToast('Abra uma placa primeiro.', 'info'); return; }
++
++    if (layout === 'board') {
++      if (pdf && board) pdf.api.moveTo({ group: board.group, position: 'center' });
++      board!.api.setActive();
++      api.maximizeGroup(board!);
++      return;
++    }
++    if (layout === 'board-pdf' && board && pdf) {
++      pdf.api.moveTo({ group: board.group, position: 'right' });
++    } else if (layout === 'board-mic' && board && mic) {
++      if (pdf) pdf.api.moveTo({ group: board.group, position: 'center' });
++      board.api.setActive();
++      mic.api.moveTo({ group: board.group, position: 'right' });
++    } else if (layout === 'pdf-mic' && pdf && mic) {
++      if (board) board.api.moveTo({ group: pdf.group, position: 'center' });
++      pdf.api.setActive();
++      mic.api.moveTo({ group: pdf.group, position: 'right' });
++    } else if (layout === 'board-pdf-mic' && board && pdf && mic) {
++      pdf.api.moveTo({ group: board.group, position: 'right' });
++      mic.api.moveTo({ group: pdf.group, position: 'right' });
++    }
++    board?.api.setActive();
++    if (layout === 'pdf-mic') pdf?.api.setActive();
++  } catch (err) {
++    log.ui.error('Failed to apply split layout:', err);
++  }
++}
+diff --git a/src/frontend/src/store/keyboard-shortcuts.ts b/src/frontend/src/store/keyboard-shortcuts.ts
+index 5606d46..0b374f9 100644
+--- a/src/frontend/src/store/keyboard-shortcuts.ts
++++ b/src/frontend/src/store/keyboard-shortcuts.ts
+@@ -106,7 +106,7 @@ export const shortcuts: Shortcut[] = [
+     id: 'rotateCW',
+     label: 'Rotate CW',
+     category: 'view',
+-    key: 'ArrowRight',
++    key: 'r',
+     mod: true,
+     description: 'Rotate 90° clockwise (board or PDF page)',
+   },
+@@ -114,16 +114,14 @@ export const shortcuts: Shortcut[] = [
+     id: 'rotateCCW',
+     label: 'Rotate CCW',
+     category: 'view',
+-    key: 'ArrowLeft',
+-    mod: true,
++    key: ',',
+     description: 'Rotate 90° counter-clockwise (board or PDF page)',
+   },
+   {
+     id: 'mirrorBoard',
+     label: 'Mirror',
+     category: 'view',
+-    key: 'ArrowUp',
+-    mod: true,
++    key: 'm',
+     description: 'Mirror horizontally (board or PDF page)',
+   },
+   {
+@@ -233,7 +231,7 @@ export const shortcuts: Shortcut[] = [
+     id: 'pdfFitWidth',
+     label: 'Fit to Width',
+     category: 'pdf',
+-    key: ' ',         // Space
++    key: 'w',
+     description: 'Reset zoom to fit page width (when PDF panel is active)',
+   },
+   {
+diff --git a/src/frontend/src/store/pdf-store.ts b/src/frontend/src/store/pdf-store.ts
+index 514976f..f4b869c 100644
+--- a/src/frontend/src/store/pdf-store.ts
++++ b/src/frontend/src/store/pdf-store.ts
+@@ -12,6 +12,7 @@ import { isOfflineBuild } from './build-mode';
+ import { navHistoryStore } from './nav-history-store';
+ import { renderSettingsStore } from './render-settings';
+ import type { PdfPlace, PdfMatchRef } from './nav-history';
++import { looseFind } from '../r2/loose-match';
+ 
+ // ES2025 shims that pdf.js calls on the main thread live in src/polyfills.ts
+ // (imported first in main.tsx); the worker's copies are in the patch.
+@@ -587,6 +588,8 @@ class PdfStore extends Emitter {
+ 
+   /** All loaded PDF filenames */
+   get loadedFileNames(): string[] { return [...this._documents.keys()]; }
++  /** 2R: nome do PDF ativo (busca junto placa ↔ PDF). */
++  get activeFileName2R(): string | null { return this._activeFileName; }
+ 
+   /** Identity of every open PDF document, for session persistence. */
+   openPdfEntries(): { fileName: string; fileSize: number; fileLastModified: number; fileId?: number }[] {
+@@ -1515,6 +1518,37 @@ class PdfStore extends Emitter {
+   }
+ 
+   private _searchSingleTerm(d: PdfDocument, query: string) {
++    const before = d.matches.length;
++    this._searchSingleTermExact(d, query);
++    // 2R Tools (Roger, 11/10/2026): «busca quebrada» também no PDF — sem achar igual,
++    // procura ignorando _ - . e espaços («pp_1v25» acha PP1V25_AWAKE_NAND)
++    if (d.matches.length === before && /[^a-z0-9]/i.test(query)) this._searchSingleTermLoose(d, query);
++  }
++
++  private _searchSingleTermLoose(d: PdfDocument, query: string) {
++    for (let pi = 0; pi < d.textPages.length; pi++) {
++      const items = d.textPages[pi];
++      for (const line of getMergedLines(items)) {
++        let from = 0, hit: [number, number] | null;
++        while ((hit = looseFind(line.denseText, query, from))) {
++          const [pos, matchEnd] = hit;
++          const itemsHit = new Set<number>();
++          for (let c = pos; c < matchEnd; c++) if (line.denseCharToItem[c] >= 0) itemsHit.add(line.denseCharToItem[c]);
++          for (const ii of itemsHit) {
++            const item = items[ii];
++            let a = item.str.length, b = 0;
++            for (let c = pos; c < matchEnd; c++) if (line.denseCharToItem[c] === ii) {
++              a = Math.min(a, line.denseCharToOffset[c]); b = Math.max(b, line.denseCharToOffset[c] + 1);
++            }
++            d.matches.push({ pageIndex: pi, itemIndex: ii, charStart: a, charEnd: b, item });
++          }
++          from = matchEnd;
++        }
++      }
++    }
++  }
++
++  private _searchSingleTermExact(d: PdfDocument, query: string) {
+     const qLower = query.toLowerCase();
+     // Single-term queries never contain spaces (multi-term branches split on
+     // \s+), so search the dense line text — that way identifiers like
+@@ -1837,6 +1871,12 @@ class PdfStore extends Emitter {
+         }
+       }
+     }
++    if (!count && /[^a-z0-9]/i.test(ql)) {          // 2R: busca quebrada
++      for (const pageItems of doc.textPages) for (const line of getMergedLines(pageItems)) {
++        let from = 0, hit: [number, number] | null;
++        while ((hit = looseFind(line.denseText, ql, from))) { count++; from = hit[1]; }
++      }
++    }
+     return count;
+   }
+ 
+diff --git a/src/frontend/src/store/render-settings.ts b/src/frontend/src/store/render-settings.ts
+index 3732316..a6fda90 100644
+--- a/src/frontend/src/store/render-settings.ts
++++ b/src/frontend/src/store/render-settings.ts
+@@ -41,6 +41,9 @@ export interface PartType {
+   id: string;
+   /** Display label shown in the Settings UI. */
+   label: string;
++  /** 2R Tools: «só os pads» — não desenha o corpo, o contorno nem o nome do
++   *  componente; ficam só os pads (estudo das nets — Roger, 11/10/2026). */
++  padsOnly?: boolean;
+   /** Uppercase prefix list (longest-match wins at resolve time). */
+   prefixes: string[];
+   /** Fill color as CSS hex (empty = no fill). */
+@@ -734,8 +737,8 @@ export const DEFAULTS: RenderSettings = {
+ 
+   clickThreshold: 15,
+   fitPadding: 50,
+-  disableInertia: true,
+-  wheelSmooth: 5,
++  disableInertia: false,
++  wheelSmooth: 2,
+   smoothZoom: true,
+   twoFingerPan: true,
+   twoFingerRotate: true,
+diff --git a/src/frontend/src/store/scroll-bindings.ts b/src/frontend/src/store/scroll-bindings.ts
+index b2f440c..98f7426 100644
+--- a/src/frontend/src/store/scroll-bindings.ts
++++ b/src/frontend/src/store/scroll-bindings.ts
+@@ -143,7 +143,7 @@ export const SLOT_LABEL: Record<ScrollSlot, string> = {
+ };
+ 
+ export const ACTION_LABEL: Record<ScrollAction, string> = { zoom: 'Zoom', pan: 'Pan', switch: 'Page' };
+-export const ACTION_COLOR: Record<ScrollAction, string> = { zoom: '#00d4ff', pan: '#ffd93d', switch: '#ff6b9d' };
++export const ACTION_COLOR: Record<ScrollAction, string> = { zoom: '#8a9099', pan: '#c3c8ce', switch: '#5f666d' };  // 2R: sobrio
+ 
+ /** Shown beside a Shift slot bound to anything but Pan (issue #40). */
+ export const SHIFT_SCROLL_NOTE =
+diff --git a/src/frontend/src/store/themes.ts b/src/frontend/src/store/themes.ts
+index 7d5273a..6dd4977 100644
+--- a/src/frontend/src/store/themes.ts
++++ b/src/frontend/src/store/themes.ts
+@@ -69,6 +69,253 @@ export interface Theme {
+ }
+ 
+ export const THEMES: Record<string, Theme> = {
++  // 2R Tools (Roger, 10/10/2026): «tudo neutro, com cara de programa profissional».
++  // Cinza grafite na interface, placa em preto e branco, sem cor de componente
++  // nem de net. A seleção fica branca (o padrão da casa: selecionado = branco).
++  '2r-clean': {
++    id: '2r-clean',
++    label: '2R Tools — Neutro',
++    ui: {
++      bgPrimary:     '#0e0f11',
++      bgSecondary:   '#16171a',
++      bgTertiary:    '#1c1d21',
++      textPrimary:   '#e6e6e6',
++      textSecondary: '#9a9da5',
++      accent:        '#4a4d55',
++      border:        '#2a2c31',
++      iconBoardBg:   '#3a3d44',
++      iconPdfBg:     '#3a3d44',
++    },
++    // placa com as cores de verdade (Roger 10/10/2026: «no BDV tem que deixar a cor
++    // da placa, sem efeito de luz») — só a interface fica neutra
++    board: {
++      canvasBackground:   '#050508',
++      boardFill:          '#ffffff',
++      outline:            '#9a9da5',
++      selection:          '#ffff44',
++      butterflySelection: '#44aaff',
++      labelText:          '#ffffff',
++      labelPart:          '#cccccc',
++      labelNet:           '#88ccff',
++      netLabelBg:         '#000000',
++      netLabelBgOpacity:  0.6,
++    },
++    // sem efeito de luz: sem auréola na seleção, sem brilho HDR e sem escurecer a placa
++    boardOverrides: {
++      showSelectionHalo: false,
++      hdrFocusGlow:      false,
++      ambientDim:        false,
++    },
++  },
++  // 2R Tools — variantes do tema padrão (Roger, 10/10/2026 23:13): «um pouco mais claro,
++  // placa puxando para o verde oliva; outro com a placa mais para o marrom; outro cinza/grafite…
++  // nada gritante… as cores padrões das nets não mudam em nada».
++  '2r-oliva': {
++    id: '2r-oliva',
++    label: '2R Tools — Oliva (mais claro)',
++    ui: {
++      bgPrimary:     '#17181b',
++      bgSecondary:   '#1f2024',
++      bgTertiary:    '#26272c',
++      textPrimary:   '#ececec',
++      textSecondary: '#a6a9b0',
++      accent:        '#5a5d66',
++      border:        '#34363c',
++      iconBoardBg:   '#464950',
++      iconPdfBg:     '#464950',
++    },
++    board: {
++      // 2R (Roger, 11/10/2026): fundo claro também nos temas médios — «está preto»
++      canvasBackground:   '#bfc2b4',
++      boardFill:          '#6f7d3e',
++      outline:            '#4f5638',
++      selection:          '#1f2023',
++      butterflySelection: '#44aaff',
++      labelText:          '#1c1f24',
++      labelPart:          '#2a2e34',
++      labelNet:           '#1f3f63',
++      netLabelBg:         '#eef0f2',
++      netLabelBgOpacity:  0.75,
++    },
++    // cores das nets/pinos não mudam (vêm das regras de cor, não do tema)
++    boardOverrides: {
++      showSelectionHalo: false,
++      hdrFocusGlow:      false,
++      ambientDim:        false,
++      boardFillAlpha:    0.3,
++    },
++  },
++  '2r-marrom': {
++    id: '2r-marrom',
++    label: '2R Tools — Marrom',
++    ui: {
++      bgPrimary:     '#0e0f11',
++      bgSecondary:   '#16171a',
++      bgTertiary:    '#1c1d21',
++      textPrimary:   '#e6e6e6',
++      textSecondary: '#9a9da5',
++      accent:        '#4a4d55',
++      border:        '#2a2c31',
++      iconBoardBg:   '#3a3d44',
++      iconPdfBg:     '#3a3d44',
++    },
++    board: {
++      // 2R (Roger, 11/10/2026): fundo claro também nos temas médios — «está preto»
++      canvasBackground:   '#c6bcae',
++      boardFill:          '#7a5b3d',
++      outline:            '#5e4c38',
++      selection:          '#1f2023',
++      butterflySelection: '#44aaff',
++      labelText:          '#1c1f24',
++      labelPart:          '#2a2e34',
++      labelNet:           '#1f3f63',
++      netLabelBg:         '#eef0f2',
++      netLabelBgOpacity:  0.75,
++    },
++    // cores das nets/pinos não mudam (vêm das regras de cor, não do tema)
++    boardOverrides: {
++      showSelectionHalo: false,
++      hdrFocusGlow:      false,
++      ambientDim:        false,
++      boardFillAlpha:    0.3,
++    },
++  },
++  '2r-grafite': {
++    id: '2r-grafite',
++    label: '2R Tools — Grafite',
++    ui: {
++      bgPrimary:     '#121315',
++      bgSecondary:   '#1a1b1e',
++      bgTertiary:    '#212226',
++      textPrimary:   '#e8e8e8',
++      textSecondary: '#a0a3aa',
++      accent:        '#52555d',
++      border:        '#2f3136',
++      iconBoardBg:   '#40434a',
++      iconPdfBg:     '#40434a',
++    },
++    board: {
++      // 2R (Roger, 11/10/2026): fundo claro também nos temas médios — «está preto»
++      canvasBackground:   '#b9bdc2',
++      boardFill:          '#8a8f96',
++      outline:            '#4a4f56',
++      selection:          '#1f2023',
++      butterflySelection: '#44aaff',
++      labelText:          '#1c1f24',
++      labelPart:          '#2a2e34',
++      labelNet:           '#1f3f63',
++      netLabelBg:         '#eef0f2',
++      netLabelBgOpacity:  0.75,
++    },
++    // cores das nets/pinos não mudam (vêm das regras de cor, não do tema)
++    boardOverrides: {
++      showSelectionHalo: false,
++      hdrFocusGlow:      false,
++      ambientDim:        false,
++      boardFillAlpha:    0.26,
++    },
++  },
++  // 2R Tools — variantes CLARAS (Roger, 10/10/2026 23:16–23:17: «mais 3 variantes para o tema
++  // claro, sem esse fundo escuro… grafite para o cinza ou gelo»). Cores das nets iguais.
++  '2r-claro-oliva': {
++    id: '2r-claro-oliva',
++    label: '2R Tools — Claro Oliva',
++    ui: {
++      bgPrimary:     '#eceee6',
++      bgSecondary:   '#e2e5da',
++      bgTertiary:    '#dcdfd2',
++      textPrimary:   '#1c1f24',
++      textSecondary: '#5b616b',
++      accent:        '#8a8f97',
++      border:        '#c6cab9',
++      iconBoardBg:   '#9aa0a8',
++      iconPdfBg:     '#9aa0a8',
++    },
++    board: {
++      canvasBackground:   '#e6e8df',
++      boardFill:          '#a7b27a',
++      outline:            '#6b7350',
++      selection:          '#1f2023',
++      butterflySelection: '#3c5a78',
++      labelText:          '#1c1f24',
++      labelPart:          '#3a3f47',
++      labelNet:           '#2d4a66',
++      netLabelBg:         '#f4f5f6',
++      netLabelBgOpacity:  0.75,
++    },
++    boardOverrides: {
++      showSelectionHalo: false,
++      hdrFocusGlow:      false,
++      ambientDim:        false,
++      boardFillAlpha:    0.42,
++    },
++  },
++  '2r-claro-areia': {
++    id: '2r-claro-areia',
++    label: '2R Tools — Claro Areia (marrom)',
++    ui: {
++      bgPrimary:     '#efebe4',
++      bgSecondary:   '#e6e0d6',
++      bgTertiary:    '#dfd8cc',
++      textPrimary:   '#1c1f24',
++      textSecondary: '#5b616b',
++      accent:        '#8a8f97',
++      border:        '#cbc2b3',
++      iconBoardBg:   '#9aa0a8',
++      iconPdfBg:     '#9aa0a8',
++    },
++    board: {
++      canvasBackground:   '#e9e4dc',
++      boardFill:          '#c2a57f',
++      outline:            '#7a6650',
++      selection:          '#1f2023',
++      butterflySelection: '#3c5a78',
++      labelText:          '#1c1f24',
++      labelPart:          '#3a3f47',
++      labelNet:           '#2d4a66',
++      netLabelBg:         '#f4f5f6',
++      netLabelBgOpacity:  0.75,
++    },
++    boardOverrides: {
++      showSelectionHalo: false,
++      hdrFocusGlow:      false,
++      ambientDim:        false,
++      boardFillAlpha:    0.42,
++    },
++  },
++  '2r-claro-gelo': {
++    id: '2r-claro-gelo',
++    label: '2R Tools — Claro Gelo (cinza)',
++    ui: {
++      bgPrimary:     '#eef0f2',
++      bgSecondary:   '#e3e6e9',
++      bgTertiary:    '#dce0e4',
++      textPrimary:   '#1c1f24',
++      textSecondary: '#5b616b',
++      accent:        '#8a8f97',
++      border:        '#c4c9cf',
++      iconBoardBg:   '#9aa0a8',
++      iconPdfBg:     '#9aa0a8',
++    },
++    board: {
++      canvasBackground:   '#e6e9ec',
++      boardFill:          '#b9c0c8',
++      outline:            '#5f6873',
++      selection:          '#1f2023',
++      butterflySelection: '#3c5a78',
++      labelText:          '#1c1f24',
++      labelPart:          '#3a3f47',
++      labelNet:           '#2d4a66',
++      netLabelBg:         '#f4f5f6',
++      netLabelBgOpacity:  0.75,
++    },
++    boardOverrides: {
++      showSelectionHalo: false,
++      hdrFocusGlow:      false,
++      ambientDim:        false,
++      boardFillAlpha:    0.45,
++    },
++  },
+   default: {
+     id: 'default',
+     label: 'BoardRipper Default',
+@@ -272,6 +519,13 @@ function clampScale(n: number): number {
+ 
+ function loadScale(): number {
+   try {
++    // 2R Tools: letra um pouco maior por padrão (Roger, 10/10/2026: «difícil de ler»).
++    // Aplicado uma vez; depois vale o que o técnico escolher na escala da interface.
++    if ((window as unknown as { __2rAcervo?: unknown }).__2rAcervo && localStorage.getItem('2r-ui-scale-set') !== '1') {
++      localStorage.setItem('2r-ui-scale-set', '1');
++      localStorage.setItem(UI_SCALE_KEY, '1.15');
++      return 1.15;
++    }
+     const raw = localStorage.getItem(UI_SCALE_KEY);
+     if (!raw) return UI_SCALE_DEFAULT;
+     const n = parseFloat(raw);
+@@ -372,6 +626,40 @@ interface PersistedTheme {
+ }
+ 
+ function loadFromStorage(): string {
++  // 2R Tools: dentro do app 2R o tema neutro é o padrão (aplicado uma vez;
++  // depois vale o que o técnico escolher em Ajustes) — 10/10/2026
++  try {
++    // 2R (23:17): o BoardRipper segue o tema do SDS — app claro (Aço, Dourado, Claro…) usa a
++    // variante clara escolhida; app escuro, a escura. Cada lado lembra a última escolha.
++    const w2 = window as unknown as { __2rAcervo?: unknown; __2rTheme?: string };
++    // último tema escolhido pelo técnico vale sempre (Roger, 11/10/2026)
++    if (w2.__2rAcervo) {
++      const last = localStorage.getItem('2r-theme-last');
++      if (last && (THEMES[last] || last === CUSTOM_ID)) {
++        localStorage.setItem('2r-clean-theme-v2', '1'); localStorage.setItem('2r-clean-theme', '1');
++        localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeId: last } as PersistedTheme));
++        return last;
++      }
++    }
++    if (w2.__2rAcervo && w2.__2rTheme) {
++      const light = w2.__2rTheme !== 'dark';
++      const def = light ? (w2.__2rTheme === 'gold' || w2.__2rTheme === 'light' ? '2r-claro-areia' : '2r-claro-gelo') : '2r-clean';
++      const pick = localStorage.getItem(light ? '2r-theme-light' : '2r-theme-dark') || def;
++      if (THEMES[pick]) {
++        localStorage.setItem('2r-clean-theme-v2', '1'); localStorage.setItem('2r-clean-theme', '1');
++        localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeId: pick } as PersistedTheme));
++        return pick;
++      }
++    }
++    // v2 (22:58, Roger: «remover essas cores azuis, gostei do padrão que estava antes»):
++    // a v1 aplicava o tema neutro só numa abertura e não gravava — na seguinte voltava o azul.
++    if ((window as unknown as { __2rAcervo?: unknown }).__2rAcervo && localStorage.getItem('2r-clean-theme-v2') !== '1') {
++      localStorage.setItem('2r-clean-theme-v2', '1');
++      localStorage.setItem('2r-clean-theme', '1');
++      localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeId: '2r-clean' } as PersistedTheme));
++      return '2r-clean';
++    }
++  } catch { /* sem armazenamento */ }
+   try {
+     const raw = localStorage.getItem(STORAGE_KEY);
+     if (!raw) return DEFAULT_ID;
+@@ -462,8 +750,16 @@ interface UiOverrides {
+  *    - chrome      → --bg-tertiary; --border derived
+  *    - accent      → --accent; --accent-fg auto-flips; --accent-hover in CSS
+  */
++export function isLightHex(h: string): boolean {
++  const m = /^#?([0-9a-f]{6})$/i.exec(h || ''); if (!m) return false;
++  const n = parseInt(m[1], 16); const r = n >> 16, g = (n >> 8) & 255, b = n & 255;
++  return (0.299 * r + 0.587 * g + 0.114 * b) > 150;
++}
++
+ export function applyThemeToDOM(theme: Theme, overrides: Partial<UiOverrides> = {}) {
+   const root = document.documentElement;
++  // 2R Tools: painéis 2R (sequência, medições, curvas…) trocam de cor junto (index.css html.r2-light)
++  root.classList.toggle('r2-light', isLightHex(theme.ui.bgPrimary));
+   const { accent, background, chrome } = overrides;
+ 
+   // Tier siblings are derived with shadeToward (not plain lightenHex) so a
+@@ -599,6 +895,14 @@ class ThemeStore extends Emitter {
+   }
+ 
+   setTheme(id: string): void {
++    // 2R: lembra a escolha separada para quando o SDS está escuro ou claro
++    try {
++      if ((window as unknown as { __2rAcervo?: unknown }).__2rAcervo && (THEMES[id] || id === CUSTOM_ID)) {
++        if (THEMES[id]) localStorage.setItem(isLightHex(THEMES[id].ui.bgPrimary) ? '2r-theme-light' : '2r-theme-dark', id);
++        // Roger (11/10/2026): «quando abrir um tema, manter ele como padrão… lembrar sempre do último»
++        localStorage.setItem('2r-theme-last', id);
++      }
++    } catch { /* */ }
+     if (id === CUSTOM_ID) {
+       // Selecting Custom seeds it from the current theme on first use so the
+       // user starts from a familiar palette rather than an empty one.
+diff --git a/src/frontend/src/store/view-commands.ts b/src/frontend/src/store/view-commands.ts
+index d18d3e2..ac47eff 100644
+--- a/src/frontend/src/store/view-commands.ts
++++ b/src/frontend/src/store/view-commands.ts
+@@ -29,6 +29,11 @@ class ViewCommands {
+   zoom(direction: ZoomDirection) {
+     for (const l of this._listeners) l('zoom', direction);
+   }
++
++  /** 2R Tools: centraliza a placa inteira na tela (barra de navegação). */
++  fit() {
++    for (const l of this._listeners) l('fit');
++  }
+ }
+ 
+ export const viewCommands = new ViewCommands();

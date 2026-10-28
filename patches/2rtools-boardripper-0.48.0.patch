@@ -1,0 +1,293 @@
+diff --git a/src/backend/main.go b/src/backend/main.go
+index 2141cff..9f68f48 100644
+--- a/src/backend/main.go
++++ b/src/backend/main.go
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"log"
++	"net"
+ 	"net/http"
+ 	"os"
+ 	"os/signal"
+@@ -602,6 +603,10 @@ func main() {
+ 	log.Printf("Library scan root: %s", scanner.ScanRoot())
+ 
+ 	addr := fmt.Sprintf(":%s", port)
++	// 2R Tools: BIND_HOST=127.0.0.1 keeps the embedded server off the LAN.
++	if host := os.Getenv("BIND_HOST"); host != "" {
++		addr = net.JoinHostPort(host, port)
++	}
+ 	// Middleware order (outer → inner):
+ 	//   securityHeaders → CSRF check → gzip → mux
+ 	// CSRF check has to see the request before mux dispatches; gzip wraps
+diff --git a/src/frontend/src/App.tsx b/src/frontend/src/App.tsx
+index 04e425f..eed031e 100644
+--- a/src/frontend/src/App.tsx
++++ b/src/frontend/src/App.tsx
+@@ -21,6 +21,7 @@ import { BoardViewerPanel } from './panels/BoardViewerPanel';
+ import { PdfViewerPanel } from './panels/PdfViewerPanel';
+ import { DatabaseEditorPanel } from './panels/DatabaseEditorPanel';
+ import { WorklistPanel } from './panels/WorklistPanel';
++import { MicroscopePanel } from './panels/MicroscopePanel';
+ import { BoardTab } from './components/BoardTab';
+ import { PdfTab } from './components/PdfTab';
+ import { HomeBackdrop } from './components/home/HomeBackdrop';
+@@ -72,6 +73,11 @@ const components: Record<string, React.FC<IDockviewPanelProps>> = {
+       <WorklistPanel />
+     </PanelErrorBoundary>
+   ),
++  microscope: () => (
++    <PanelErrorBoundary label="Microscópio">
++      <MicroscopePanel />
++    </PanelErrorBoundary>
++  ),
+ };
+ 
+ const tabComponents = {
+diff --git a/src/frontend/src/components/ComponentInfoBody.tsx b/src/frontend/src/components/ComponentInfoBody.tsx
+index 84c89fb..4085cd5 100644
+--- a/src/frontend/src/components/ComponentInfoBody.tsx
++++ b/src/frontend/src/components/ComponentInfoBody.tsx
+@@ -76,6 +76,10 @@ export function ComponentInfoBody({
+    *  NetBranchSection, because the caret that drives it is now part of the
+    *  selected pin row's net cell. */
+   const [collapsedNet, setCollapsedNet] = useState<string | null>(null);
++  // 2R Tools (FlexBV): filtro e ordenação da tabela de pinos — ajuda a achar
++  // uma net/pino dentro de um CI grande (ex.: CD3217, linhas de LDO).
++  const [pinFilter, setPinFilter] = useState('');
++  const [pinSort, setPinSort] = useState<{ col: 'num' | 'name' | 'net'; dir: 1 | -1 } | null>(null);
+ 
+   // Auto-load matches + cached data when the active board changes. Cheap:
+   // hits the backend's match endpoint once per board, and the per-bpath
+@@ -158,6 +162,37 @@ export function ComponentInfoBody({
+ 
+   /** Pin-table column count — the inline net row spans all of it. */
+   const pinColumns = 3 + (board.diodeReference ? 1 : 0) + (obd.hasData ? 1 : 0);
++  // Ordem/visibilidade das linhas de pino: iteramos por ÍNDICE ORIGINAL, então
++  // seleção, net-branch e eco continuam corretos mesmo com filtro/ordenação.
++  const pinOrder: number[] = (() => {
++    const order = selectedPart.pins.map((_, i) => i);
++    const q = pinFilter.trim().toLowerCase();
++    const filtered = q
++      ? order.filter((i) => {
++          const pp = selectedPart.pins[i];
++          return String(pp.number ?? '').toLowerCase().includes(q)
++            || (pp.name ?? '').toLowerCase().includes(q)
++            || (pp.net ?? '').toLowerCase().includes(q);
++        })
++      : order;
++    if (!pinSort) return filtered;
++    const { col, dir } = pinSort;
++    return [...filtered].sort((a, b) => {
++      const pa = selectedPart.pins[a], pb = selectedPart.pins[b];
++      const va = col === 'num' ? pa.number : col === 'name' ? (pa.name ?? '') : (pa.net ?? '');
++      const vb = col === 'num' ? pb.number : col === 'name' ? (pb.name ?? '') : (pb.net ?? '');
++      return String(va).localeCompare(String(vb), undefined, { numeric: true }) * dir;
++    });
++  })();
++  const togglePinSort = (col: 'num' | 'name' | 'net') =>
++    setPinSort((cur) =>
++      cur && cur.col === col
++        ? cur.dir === 1
++          ? { col, dir: -1 as const }
++          : null
++        : { col, dir: 1 as const });
++  const pinSortArrow = (col: 'num' | 'name' | 'net') =>
++    pinSort?.col === col ? (pinSort.dir === 1 ? ' ▲' : ' ▼') : '';
+ 
+   const meta = selectedPart.meta;
+   const metaRows: Array<[string, string]> = [];
+@@ -215,19 +250,29 @@ export function ComponentInfoBody({
+         />
+       )}
+ 
++      <div className="pin-filter-row">
++        <input
++          type="text"
++          className="pin-filter-input"
++          value={pinFilter}
++          onChange={(e) => setPinFilter(e.target.value)}
++          placeholder="Filtrar pinos (nome, net, nº)…"
++        />
++      </div>
+       <div className="pin-table-container">
+         <table className="pin-table">
+           <thead>
+             <tr>
+-              <th>#</th>
+-              <th>Name</th>
+-              <th>Net</th>
++              <th className="pin-th-sort" onClick={() => togglePinSort('num')} title="Ordenar por número">{`#${pinSortArrow('num')}`}</th>
++              <th className="pin-th-sort" onClick={() => togglePinSort('name')} title="Ordenar por nome">{`Name${pinSortArrow('name')}`}</th>
++              <th className="pin-th-sort" onClick={() => togglePinSort('net')} title="Ordenar por net">{`Net${pinSortArrow('net')}`}</th>
+               {board.diodeReference && <th title="diode-mode reference reading baked into the board file (volts)">Diode</th>}
+               {obd.hasData && <th title="diode / V / Ω from OpenBoardData">OBD</th>}
+             </tr>
+           </thead>
+           <tbody>
+-            {selectedPart.pins.map((pin, idx) => {
++            {pinOrder.map((idx) => {
++              const pin = selectedPart.pins[idx];
+               const isSelected = selection.pinIndex === idx;
+               const isNetHighlighted = selection.highlightedNet === pin.net && pin.net !== '';
+               const obdNets = obd.hasData ? obd.lookup(pin.net) : [];
+diff --git a/src/frontend/src/index.css b/src/frontend/src/index.css
+index a87a4da..c7defe9 100644
+--- a/src/frontend/src/index.css
++++ b/src/frontend/src/index.css
+@@ -1424,6 +1424,21 @@ body {
+   overflow: auto;
+   max-height: calc(100% - 80px);
+ }
++/* 2R Tools (FlexBV): filtro e cabeçalhos ordenáveis da tabela de pinos — sóbrio */
++.pin-filter-row { padding: 2px 0 4px; }
++.pin-filter-input {
++  width: 100%;
++  box-sizing: border-box;
++  padding: 2px 6px;
++  font-size: 0.9em;
++  color: var(--text-primary);
++  background: var(--bg-secondary);
++  border: 1px solid var(--border);
++  border-radius: 3px;
++}
++.pin-filter-input:focus { outline: none; border-color: var(--text-secondary); }
++.pin-th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
++.pin-th-sort:hover { color: var(--text-primary); }
+ 
+ .pin-table {
+   width: 100%;
+diff --git a/src/frontend/src/panels/ToolsPanel.tsx b/src/frontend/src/panels/ToolsPanel.tsx
+index b73380e..9cc783d 100644
+--- a/src/frontend/src/panels/ToolsPanel.tsx
++++ b/src/frontend/src/panels/ToolsPanel.tsx
+@@ -1,5 +1,5 @@
+ import { useDatabank } from '../hooks/useDatabank';
+-import { ensureDatabaseEditorPanel } from '../store/dockview-api';
++import { ensureDatabaseEditorPanel, ensureMicroscopePanel } from '../store/dockview-api';
+ import { ResistorColorTool } from './tools/ResistorColorTool';
+ import { SmdResistorTool } from './tools/SmdResistorTool';
+ import { CapacitorTool } from './tools/CapacitorTool';
+@@ -97,6 +97,17 @@ export function ToolsPanel() {
+           <span className="tools-entry-status">opens panel</span>
+         </button>
+       )}
++      <button
++        className="tools-entry"
++        data-testid="tools-entry-microscope"
++        onClick={ensureMicroscopePanel}
++      >
++        <span className="tools-entry-text">
++          Microscópio
++          <small>câmera USB ao lado da placa (split)</small>
++        </span>
++        <span className="tools-entry-status">opens panel</span>
++      </button>
+       <div className="tools-entry tools-entry-soon" aria-disabled="true">
+         <span className="tools-entry-text">Wiki</span>
+         <span className="tools-entry-status">soon</span>
+diff --git a/src/frontend/src/store/dockview-api.ts b/src/frontend/src/store/dockview-api.ts
+index f942df4..3bde41c 100644
+--- a/src/frontend/src/store/dockview-api.ts
++++ b/src/frontend/src/store/dockview-api.ts
+@@ -312,6 +312,30 @@ export function ensureWorklistPanel(): void {
+   }
+ }
+ 
++export function microscopePanelId(): string { return 'microscope-panel'; }
++
++/** Abre o painel do Microscópio dividindo a tela: metade placa, metade câmera. */
++export function ensureMicroscopePanel(): void {
++  try {
++    const api = getDockviewApi();
++    if (!api) return;
++    const id = microscopePanelId();
++    const existing = api.getPanel(id);
++    if (existing) { existing.api.setActive(); return; }
++    const anyBoard = api.panels.find(p => p.id.startsWith('board-'));
++    api.addPanel({
++      id,
++      component: 'microscope',
++      title: 'Microscópio',
++      ...(anyBoard
++        ? { position: { referencePanel: anyBoard.id, direction: 'right' as const } }
++        : {}),
++    });
++  } catch (err) {
++    log.ui.error('Failed to open Microscope panel:', err);
++  }
++}
++
+ export function ensurePdfPanel(fileName: string): void {
+   (async () => {
+     try {
+diff --git a/src/frontend/src/store/keyboard-shortcuts.ts b/src/frontend/src/store/keyboard-shortcuts.ts
+index 5606d46..0b374f9 100644
+--- a/src/frontend/src/store/keyboard-shortcuts.ts
++++ b/src/frontend/src/store/keyboard-shortcuts.ts
+@@ -106,7 +106,7 @@ export const shortcuts: Shortcut[] = [
+     id: 'rotateCW',
+     label: 'Rotate CW',
+     category: 'view',
+-    key: 'ArrowRight',
++    key: 'r',
+     mod: true,
+     description: 'Rotate 90° clockwise (board or PDF page)',
+   },
+@@ -114,16 +114,14 @@ export const shortcuts: Shortcut[] = [
+     id: 'rotateCCW',
+     label: 'Rotate CCW',
+     category: 'view',
+-    key: 'ArrowLeft',
+-    mod: true,
++    key: ',',
+     description: 'Rotate 90° counter-clockwise (board or PDF page)',
+   },
+   {
+     id: 'mirrorBoard',
+     label: 'Mirror',
+     category: 'view',
+-    key: 'ArrowUp',
+-    mod: true,
++    key: 'm',
+     description: 'Mirror horizontally (board or PDF page)',
+   },
+   {
+@@ -233,7 +231,7 @@ export const shortcuts: Shortcut[] = [
+     id: 'pdfFitWidth',
+     label: 'Fit to Width',
+     category: 'pdf',
+-    key: ' ',         // Space
++    key: 'w',
+     description: 'Reset zoom to fit page width (when PDF panel is active)',
+   },
+   {
+diff --git a/src/frontend/src/store/render-settings.ts b/src/frontend/src/store/render-settings.ts
+index 3732316..bab9ee0 100644
+--- a/src/frontend/src/store/render-settings.ts
++++ b/src/frontend/src/store/render-settings.ts
+@@ -734,8 +734,8 @@ export const DEFAULTS: RenderSettings = {
+ 
+   clickThreshold: 15,
+   fitPadding: 50,
+-  disableInertia: true,
+-  wheelSmooth: 5,
++  disableInertia: false,
++  wheelSmooth: 2,
+   smoothZoom: true,
+   twoFingerPan: true,
+   twoFingerRotate: true,
+diff --git a/src/frontend/src/store/scroll-bindings.ts b/src/frontend/src/store/scroll-bindings.ts
+index b2f440c..98f7426 100644
+--- a/src/frontend/src/store/scroll-bindings.ts
++++ b/src/frontend/src/store/scroll-bindings.ts
+@@ -143,7 +143,7 @@ export const SLOT_LABEL: Record<ScrollSlot, string> = {
+ };
+ 
+ export const ACTION_LABEL: Record<ScrollAction, string> = { zoom: 'Zoom', pan: 'Pan', switch: 'Page' };
+-export const ACTION_COLOR: Record<ScrollAction, string> = { zoom: '#00d4ff', pan: '#ffd93d', switch: '#ff6b9d' };
++export const ACTION_COLOR: Record<ScrollAction, string> = { zoom: '#8a9099', pan: '#c3c8ce', switch: '#5f666d' };  // 2R: sobrio
+ 
+ /** Shown beside a Shift slot bound to anything but Pan (issue #40). */
+ export const SHIFT_SCROLL_NOTE =
