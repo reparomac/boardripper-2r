@@ -1,0 +1,141 @@
+From f6ec488e749c4ed0dcd90de18a4e8500ce9180db Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:44:16 -0300
+Subject: [PATCH 19/22] 2R port p23 minimap
+
+---
+ src/frontend/src/components/BoardMinimap.tsx | 32 ++++++++++++++++----
+ src/frontend/src/components/BoardSidebar.tsx | 17 ++++++++---
+ 2 files changed, 38 insertions(+), 11 deletions(-)
+
+diff --git a/src/frontend/src/components/BoardMinimap.tsx b/src/frontend/src/components/BoardMinimap.tsx
+index e9146a06..1387aec5 100644
+--- a/src/frontend/src/components/BoardMinimap.tsx
++++ b/src/frontend/src/components/BoardMinimap.tsx
+@@ -13,6 +13,11 @@ import type { BoardRenderer } from '../renderer/BoardRenderer';
+ import { PanActivity } from '../store/pan-activity';
+ import { boardStore } from '../store/board-store';
+ import { themeStore } from '../store/themes';
++import { QuickMenu } from './QuickMenu';
++
++/* 2R 27/10/2026 (Roger: «no mapa, você pode expandir ou diminuir… mas fica sempre disponível, sem ocultar»):
++   tamanho do mapa (27/10: Roger pediu 1/4 e depois «aumenta um pouco, mantém como era antes» → tamanho original) */
++function r2Me(): number { return 1; }
+ 
+ const MAX_W = 220;
+ const MAX_H = 150;
+@@ -128,13 +133,18 @@ function paintBoard(ctx: CanvasRenderingContext2D, model: Model, k: number, ox:
+ }
+ 
+ export function BoardMinimap({ renderer, mode }: { renderer: BoardRenderer | null; mode: 'always' | 'onPan' | 'off' }) {
++  // 2R 27/10/2026 (Roger: «pôr a opção de ocultar o mapa, com o botão direito»): seta no canto minimiza (fica só
++  // «Mapa ▾»); clicar nela volta; botão direito tem o mesmo. O mapa nunca some.
++  const [r2Cm, setR2Cm] = useState<{ x: number; y: number } | null>(null);
++  const [r2Min, setR2Min] = useState(() => { try { return localStorage.getItem('2r-mapa-min') === '1'; } catch { return false; } });
++  const r2Mm = (v: boolean) => { try { localStorage.setItem('2r-mapa-min', v ? '1' : '0'); } catch { /* */ } setR2Min(v); };
+   const canvasRef = useRef<HTMLCanvasElement>(null);
+   const baseRef = useRef<{ sig: string; canvas: HTMLCanvasElement; k: number; ox: number; oy: number; w: number; h: number } | null>(null);
+   const activity = useRef(new PanActivity());
+   const [shown, setShown] = useState(false);
+   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+   const hovering = useRef(false);
+-  const [size, setSize] = useState({ w: MAX_W, h: MAX_H });
++  const [size, setSize] = useState({ w: Math.round(MAX_W * r2Me()), h: Math.round(MAX_H * r2Me()) });
+ 
+   const visible = mode === 'always' || (mode === 'onPan' && shown);
+ 
+@@ -145,11 +155,11 @@ export function BoardMinimap({ renderer, mode }: { renderer: BoardRenderer | nul
+     const dpr = Math.max(1, window.devicePixelRatio || 1);
+     const cb = contentBounds(model);
+     const sel = boardStore.selection.partIndex;
+-    const sig = `${model.roots.map(r => r.m.join(',')).join('|')}|${model.board.parts.length}|${boardStore.showTop}${boardStore.showBottom}|${sel}|${mapSig()}`;
++    const sig = `${model.roots.map(r => r.m.join(',')).join('|')}|${model.board.parts.length}|${boardStore.showTop}${boardStore.showBottom}|${sel}|${mapSig()}|${r2Me()}`;
+     let base = baseRef.current;
+     if (!base || base.sig !== sig) {
+       // Fit the board into MAX_W × MAX_H, keeping its aspect.
+-      const k = Math.min((MAX_W - 8) / cb.w, (MAX_H - 8) / cb.h);
++      const k = Math.min((MAX_W * r2Me() - 8) / cb.w, (MAX_H * r2Me() - 8) / cb.h);
+       const w = Math.round(cb.w * k + 8), h = Math.round(cb.h * k + 8);
+       const off = base?.canvas ?? document.createElement('canvas');
+       off.width = Math.round(w * dpr); off.height = Math.round(h * dpr);
+@@ -222,7 +232,7 @@ export function BoardMinimap({ renderer, mode }: { renderer: BoardRenderer | nul
+   useEffect(() => boardStore.subscribe(() => { if (visible) paint(); }), [visible, paint]);
+   // A scheme switch repaints it in the new colours.
+   useEffect(() => themeStore.subscribe(() => { if (visible) paint(); }), [visible, paint]);
+-  useEffect(() => { if (visible) paint(); }, [visible, paint]);
++  useEffect(() => { if (visible && !r2Min) setTimeout(paint, 0); }, [visible, paint, r2Min]);
+ 
+   const dragging = useRef(false);
+   const goTo = useCallback((e: React.PointerEvent) => {
+@@ -240,10 +250,13 @@ export function BoardMinimap({ renderer, mode }: { renderer: BoardRenderer | nul
+       className={`board-minimap${visible ? ' visible' : ''}`}
+       data-testid="board-minimap"
+       data-visible={visible ? 'true' : 'false'}
+-      style={{ width: size.w, height: size.h }}
++      style={r2Min ? { width: 'auto', height: 'auto' } : { width: size.w, height: size.h }}
+       onPointerEnter={() => { hovering.current = true; }}
+       onPointerLeave={() => { hovering.current = false; }}
++      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setR2Cm({ x: e.clientX, y: e.clientY }); }}
+       onPointerDown={e => {
++        if (r2Min) { e.stopPropagation(); return; }
++        if (e.button === 2) e.stopPropagation();
+         if (!visible || e.button !== 0) return;
+         e.stopPropagation();
+         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+@@ -259,7 +272,14 @@ export function BoardMinimap({ renderer, mode }: { renderer: BoardRenderer | nul
+       onPointerCancel={() => { dragging.current = false; }}
+       onLostPointerCapture={() => { dragging.current = false; }}
+     >
+-      <canvas ref={canvasRef} style={{ width: size.w, height: size.h }} />
++      {r2Min
++        ? <button type="button" className="r2-mapa-chip" title="Mostrar o mapa" onPointerDown={x => x.stopPropagation()}
++                  onClick={x => { x.stopPropagation(); r2Mm(false); }}>Mapa<span className="r2-mapa-seta">▾</span></button>
++        : <canvas ref={canvasRef} style={{ width: size.w, height: size.h }} />}
++      {!r2Min && <button type="button" className="r2-mapa-min" title="Minimizar o mapa" aria-label="Minimizar o mapa"
++                         onPointerDown={x => x.stopPropagation()} onClick={x => { x.stopPropagation(); r2Mm(true); }}>▴</button>}
++      {r2Cm && <QuickMenu x={r2Cm.x} y={r2Cm.y} ariaLabel="Mapa" testId="r2-mapa-menu" onClose={() => setR2Cm(null)}
++        items={[r2Min ? { kind: 'item', label: 'Mostrar o mapa', onSelect: () => r2Mm(false) } : { kind: 'item', label: 'Minimizar o mapa', onSelect: () => r2Mm(true) }]} />}
+     </div>
+   );
+ }
+diff --git a/src/frontend/src/components/BoardSidebar.tsx b/src/frontend/src/components/BoardSidebar.tsx
+index 85a77bba..5238d44a 100644
+--- a/src/frontend/src/components/BoardSidebar.tsx
++++ b/src/frontend/src/components/BoardSidebar.tsx
+@@ -22,7 +22,7 @@ import { boardKnowledge } from '../store/board-knowledge';
+ import { bomReasonLabel, type BoardData, type Part } from '../parsers';
+ import { pinDisplayId } from '../parsers/types';
+ import { setActiveSearchInput, getActiveSearchInput } from './BoardSidebar.utils';
+-import { looseMatch } from '../r2/loose-match';
++import { looseMatch, r2Match } from '../r2/loose-match';
+ import { IS_2R } from '../r2/env';
+ import { mirrorToPdf, searchSyncOn } from '../r2/search-sync';
+ 
+@@ -1115,13 +1115,20 @@ function SearchTab({ tabId }: { tabId: number }) {
+ 
+   // Compute filtered results (show all when no query)
+   const ql = query.toLowerCase();
++  // 2R 26/10/2026: busca Exata | Geral da placa — refaz a lista quando a chave muda
++  const [r2x, setR2x] = useState(0);
++  useEffect(() => {
++    const f = () => setR2x(q => q + 1);
++    window.addEventListener('2r-busca-exata', f);
++    return () => window.removeEventListener('2r-busca-exata', f);
++  }, []);
+   const matchedParts = useMemo(
+-    () => ql ? sortedParts.filter(p => looseMatch(p.name, ql)) : sortedParts,
+-    [sortedParts, ql],
++    () => ql ? sortedParts.filter(p => r2Match(p.name, ql)) : sortedParts,
++    [sortedParts, ql, r2x], // eslint-disable-line react-hooks/exhaustive-deps
+   );
+   const matchedNets = useMemo(
+-    () => ql ? sortedNets.filter(([name]) => looseMatch(name, ql)) : sortedNets,
+-    [sortedNets, ql],
++    () => ql ? sortedNets.filter(([name]) => r2Match(name, ql)) : sortedNets,
++    [sortedNets, ql, r2x], // eslint-disable-line react-hooks/exhaustive-deps
+   );
+ 
+   // Render cap: dense boards have 5–8k parts/nets. Rendering them all
+-- 
+2.43.0
+

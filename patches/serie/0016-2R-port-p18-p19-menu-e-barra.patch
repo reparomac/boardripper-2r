@@ -1,0 +1,154 @@
+From d0dca9e94ea8a80000b311cd0f87e0aa700a0214 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:40:27 -0300
+Subject: [PATCH 16/22] 2R port p18-p19 menu e barra
+
+---
+ src/frontend/src/components/MenuBar2R.tsx | 19 +++++++-
+ src/frontend/src/components/NavBar2R.tsx  | 57 +++++++++++++++++++++--
+ 2 files changed, 69 insertions(+), 7 deletions(-)
+
+diff --git a/src/frontend/src/components/MenuBar2R.tsx b/src/frontend/src/components/MenuBar2R.tsx
+index da7a6064..aff2cf2e 100644
+--- a/src/frontend/src/components/MenuBar2R.tsx
++++ b/src/frontend/src/components/MenuBar2R.tsx
+@@ -15,6 +15,10 @@ import { openSettings2R } from './SettingsWindow2R';
+ import { openTrackpadPrefs } from './TrackpadPrefs2R';
+ import logo2r from '../assets/2r-logo.png';
+ import { stepPin } from '../r2/probe-seq';
++import { NAVBAR_LAYOUT_KEY } from './NavBar2R';
++
++type R2Telas = { set(papel: string, n: number): Promise<{ externas?: unknown[] } | null> };
++const r2Telas = (): R2Telas | undefined => (window as unknown as { __2rTelas?: R2Telas }).__2rTelas;
+ 
+ /**
+  * 2R Tools: menu de texto no alto, como no FlexBV (Roger, 10/10/2026:
+@@ -89,9 +93,20 @@ function menus(): { name: string; items: Entry[] }[] {
+       { head: 'Dividir tela' },
+       ...SPLITS.map(l => ({ label: SPLIT_LABELS[l], run: () => { try { localStorage.setItem('2r-split-layout', l); } catch { /* */ } applySplitLayout(l); } })),
+       { label: '2 janelas (PDF numa segunda janela)', run: () => setTwoWindowMode(!isTwoWindowMode()) },
++      // 2R 27/10/2026 (Roger: «opção de abrir o PDF numa segunda ou terceira tela… sempre abrir a câmera térmica com a
++      // tela externa») — window.__2rTelas vem do app (ui/boardview_view.py)
++      { head: 'Telas' },
++      { label: 'PDF na 2ª tela', run: () => { r2Telas()?.set('pdf', 1).then(r => { if (!isTwoWindowMode()) setTwoWindowMode(true); if (r && r.externas && !r.externas.length) boardStore.addToast('Só há uma tela ligada: o PDF abre numa janela nesta tela.', 'info'); }); } },
++      { label: 'PDF na 3ª tela', run: () => { r2Telas()?.set('pdf', 2).then(r => { if (!isTwoWindowMode()) setTwoWindowMode(true); if (r && r.externas && r.externas.length < 2) boardStore.addToast('Não há 3ª tela ligada: o PDF vai para a 2ª.', 'info'); }); } },
++      { label: 'PDF: perguntar a tela ao abrir', run: () => { r2Telas()?.set('pdf', 0).then(() => boardStore.addToast('PDF: com mais de uma tela, o app pergunta em qual abrir.', 'info')); } },
++      { label: 'Câmera: perguntar a tela ao abrir', run: () => { r2Telas()?.set('termica', 0).then(() => boardStore.addToast('Câmera: com mais de uma tela, o app pergunta em qual abrir.', 'info')); } },
++      { label: 'Câmera térmica na 2ª tela', run: () => { r2Telas()?.set('termica', 1).then(() => boardStore.addToast('Câmera térmica: abre na 2ª tela.', 'info')); } },
++      { label: 'Câmera térmica na 3ª tela', run: () => { r2Telas()?.set('termica', 2).then(() => boardStore.addToast('Câmera térmica: abre na 3ª tela.', 'info')); } },
+       'sep',
+       { head: 'Tema' },
+-      theme('2r-clean', 'Escuro: 2R Neutro (padrão)'),
++      theme('2r-ambar', 'Escuro: 2R Âmbar (padrão, estilo FlexBV)'),
++      theme('2r-clean', 'Escuro: 2R Placa'),
++      theme('2r-clean-antigo', 'Escuro: 2R Neutro (anterior)'),
+       theme('2r-oliva', 'Médio: 2R Oliva'),
+       theme('2r-marrom', 'Médio: 2R Marrom'),
+       theme('2r-grafite', 'Médio: 2R Grafite'),
+@@ -158,7 +173,7 @@ function menus(): { name: string; items: Entry[] }[] {
+       { label: 'Esquemático (PDF)…', run: () => openSettings2R('pdf') },
+       { label: 'Biblioteca local…', run: () => openSettings2R('server') },
+       { label: 'Desempenho…', run: () => openSettings2R('performance') },
+-      { label: 'Voltar a barra de ícones ao padrão', run: () => { try { localStorage.removeItem('2r-navbar-layout-v4'); } catch { /* */ } location.reload(); } },
++      { label: 'Voltar a barra de ícones ao padrão', run: () => { try { localStorage.removeItem(NAVBAR_LAYOUT_KEY); } catch { /* */ } location.reload(); } },
+     ] },
+     { name: 'Ajuda', items: [
+       { label: 'Atalhos do teclado', key: '?', run: () => window.dispatchEvent(new KeyboardEvent('keydown', { key: '?' })) },
+diff --git a/src/frontend/src/components/NavBar2R.tsx b/src/frontend/src/components/NavBar2R.tsx
+index 3893195c..13d27b04 100644
+--- a/src/frontend/src/components/NavBar2R.tsx
++++ b/src/frontend/src/components/NavBar2R.tsx
+@@ -7,6 +7,7 @@ import {
+   IconLayersSubtract, IconButterfly, IconRotate2, IconFlipHorizontal, IconHierarchy, IconFolderOpen,
+   IconArrowLeft, IconArrowRight, IconAppWindow, IconPlus, IconRestore,
+   IconSunOff, IconPalette, IconTag, IconRoute, IconGauge, IconTargetArrow, IconComponents,
++  createReactComponent,
+ } from '@tabler/icons-react';
+ import { boardStore } from '../store/board-store';
+ import { pdfStore } from '../store/pdf-store';
+@@ -43,6 +44,15 @@ function flipSide() {
+ type Item = { id: string; label: string; short?: string; title: string; icon: React.ReactNode; run?: () => void };
+ 
+ const I = (C: typeof IconZoomIn) => <C size={16} stroke={1.75} />;
++// 2R 23/10 a 27/10/2026: ícones próprios da barra (padrão FlexBV)
++const IconZoomOutBig = createReactComponent('outline', '2r-zoom-out-big', 'ZoomOutBig', [['path', { d: 'M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0', key: 'svg-0' }], ['path', { d: 'M9 12h6', key: 'svg-1' }]]);
++const IconZoomInBig = createReactComponent('outline', '2r-zoom-in-big', 'ZoomInBig', [['path', { d: 'M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0', key: 'svg-0' }], ['path', { d: 'M9 12h6', key: 'svg-1' }], ['path', { d: 'M12 9v6', key: 'svg-2' }]]);
++const IconClearSearch = createReactComponent('outline', '2r-clear-search', 'ClearSearch', [['path', { d: 'M18 6l-12 12', key: 'svg-0' }], ['path', { d: 'M6 6l12 12', key: 'svg-1' }]]);
++const IconShot = createReactComponent('outline', '2r-shot', 'Shot', [['path', { d: 'M5 7h1a2 2 0 0 0 2 -2a1 1 0 0 1 1 -1h6a1 1 0 0 1 1 1a2 2 0 0 0 2 2h1a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2', key: 'svg-0' }], ['path', { d: 'M9 13a3 3 0 1 0 6 0a3 3 0 1 0 -6 0', key: 'svg-1' }]]);
++const IconSqT = createReactComponent('outline', 'square-letter-t', 'SquareLetterT', [['path', { d: 'M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14', key: 'svg-0' }], ['path', { d: 'M10 8h4', key: 'svg-1' }], ['path', { d: 'M12 8v8', key: 'svg-2' }]]);
++const IconSqB = createReactComponent('outline', 'square-letter-b', 'SquareLetterB', [['path', { d: 'M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14', key: 'svg-0' }], ['path', { d: 'M10 16h2a2 2 0 1 0 0 -4h-2h2a2 2 0 1 0 0 -4h-2v8', key: 'svg-1' }]]);
++const IconScreen2 = createReactComponent('outline', '2r-screen2', 'Screen2', [['path', { d: 'M2 6a1 1 0 0 1 1 -1h8a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-8a1 1 0 0 1 -1 -1z', key: 'svg-0' }], ['path', { d: 'M12 9h9a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-8a1 1 0 0 1 -1 -1', key: 'svg-1' }], ['path', { d: 'M5 13v3h3', key: 'svg-2' }], ['path', { d: 'M15 17v3m-2 0h4', key: 'svg-3' }]]);
++const r2w = window as unknown as { __2rShot?: () => void; __2rScreen2?: () => void };
+ 
+ /** Todas as funções que podem ir para a barra. */
+ const CATALOG: Item[] = [
+@@ -80,13 +90,34 @@ const CATALOG: Item[] = [
+   { id: 'seq', label: 'Sequência de start', short: 'Start', title: 'Sequência de start (setas do teclado)', icon: I(IconRoute), run: () => showSidebarTab('guide' as never) },
+   { id: 'meter', label: 'Medições', short: 'Medições', title: 'Medições com multímetro (Rigol / i2C)', icon: I(IconGauge), run: () => showSidebarTab('meter' as never) },
+   { id: 'focusSel', label: 'Ir para a seleção', short: 'Seleção', title: 'Levar a câmera até o componente selecionado', icon: I(IconTargetArrow), run: () => { const t = boardStore.activeTab; const pi = t?.selection.partIndex; if (t?.board && pi != null) boardStore.focusPart(t.board.parts[pi].name); } },
++  { id: 'zoomOutBig', label: 'Afastar (passo grande)', title: 'Afastar (passo grande)', icon: I(IconZoomOutBig), run: () => { viewCommands.zoom('out'); viewCommands.zoom('out'); viewCommands.zoom('out'); } },
++  { id: 'zoomInBig', label: 'Aproximar (passo grande)', title: 'Aproximar (passo grande)', icon: I(IconZoomInBig), run: () => { viewCommands.zoom('in'); viewCommands.zoom('in'); viewCommands.zoom('in'); } },
++  { id: 'clearSearch', label: 'Limpar a busca', title: 'Limpar a busca e a seleção (Esc)', icon: I(IconClearSearch), run: () => {
++    try { boardStore.setSearch(''); } catch { /* */ }
++    try { boardStore.selectPart(null); } catch { /* */ }
++    try { boardStore.highlightNet(null); } catch { /* */ }
++    try {
++      const i = document.querySelector('.toolbar-search') as HTMLInputElement | null;
++      if (i) { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(i, ''); i.dispatchEvent(new Event('input', { bubbles: true })); }
++    } catch { /* */ }
++  } },
++  { id: 'shot', label: 'Foto da tela', title: 'Foto da tela: salva a placa em PNG (Documentos › 2R Tools › Downloads › Prints da placa) e copia', icon: I(IconShot),
++    run: () => { try { if (r2w.__2rShot) r2w.__2rShot(); else boardStore.addToast('A foto da tela só funciona dentro do SDS.', 'info'); } catch { /* */ } } },
+   { id: 'split', label: 'Dividir tela', short: 'Dividir tela', title: 'Dividir a tela: escolha o que fica lado a lado', icon: I(IconLayoutColumns) },
++  { id: 'top', label: 'Top (lado de cima)', short: 'Top', title: 'Mostrar o lado de cima (top) da placa', icon: I(IconSqT), run: () => boardStore.selectTop() },
++  { id: 'bottom', label: 'Bottom (lado de baixo)', short: 'Bottom', title: 'Mostrar o lado de baixo (bottom) da placa', icon: I(IconSqB), run: () => boardStore.selectBottom() },
++  { id: 'screen2', label: 'Segunda tela', short: 'Segunda tela', title: 'Segunda tela: leva o Boardview para o outro monitor em tela cheia (de novo volta para o app)', icon: I(IconScreen2),
++    run: () => { try { if (r2w.__2rScreen2) r2w.__2rScreen2(); else boardStore.addToast('Segunda tela só funciona dentro do SDS', 'info'); } catch { /* */ } } },
+ ];
+ const BY_ID = Object.fromEntries(CATALOG.map(c => [c.id, c]));
+ const SEP = 'sep';
+ 
+-const DEFAULT_LAYOUT = ['fit', 'zoomIn', 'zoomOut', SEP, 'side', SEP, 'netLines', 'dim', 'legend', 'parts', SEP, 'micGroup', SEP, 'split'];
+-const KEY = '2r-navbar-layout-v4';   // v4: linhas das nets, escurecer e cores na barra (22:50)   // v3: microscópio agrupado   // v2: uma barra só (padrão FlexBV) — 10/10/2026
++// 2R 23/10/2026: barra no padrão FlexBV (os básicos; 24/10: os dois girar juntos)
++const DEFAULT_LAYOUT = ['split', 'zoomOut', 'zoomIn', 'zoomOutBig', 'zoomInBig', 'rotL', 'rotR', 'flipV', 'mirror', 'fit', 'clearSearch', 'netLines', 'shot',
++  SEP, 'side', SEP, 'dim', 'legend', 'parts', SEP, 'micGroup', SEP, 'screen2'];
++export const NAVBAR_LAYOUT_KEY = '2r-navbar-layout-v6';
++const KEY = NAVBAR_LAYOUT_KEY; // v6 (23/10/2026)
++const R2_MIGRA_ROT_MOVED = false;   // v4: linhas das nets, escurecer e cores na barra (22:50)   // v3: microscópio agrupado   // v2: uma barra só (padrão FlexBV) — 10/10/2026
+ 
+ function loadLayout(): string[] {
+   try {
+@@ -100,10 +131,26 @@ function loadLayout(): string[] {
+           localStorage.setItem('2r-navbar-parts-added', '1'); localStorage.setItem(KEY, JSON.stringify(l));
+         }
+       } catch { /* */ }
+-      // 11/10/2026 (aprovado pelo Roger): girar e espelhar saem da barra — ficam no menu Placa
+-      // e nos atalhos — para a busca caber maior. Uma vez só (depois vale o que o técnico montar).
++      // 2R 24/10/2026: os dois «girar» lado a lado (uma vez)
+       try {
+-        if (!localStorage.getItem('2r-navbar-rot-moved')) {
++        if (!localStorage.getItem('2r-navbar-rot-juntos')) {
++          const a = l.indexOf('rotL'), r = l.indexOf('rotR');
++          if (a >= 0 && r >= 0 && r !== a + 1) { l.splice(r, 1); l.splice(l.indexOf('rotL') + 1, 0, 'rotR'); }
++          localStorage.setItem('2r-navbar-rot-juntos', '1'); localStorage.setItem(KEY, JSON.stringify(l));
++        }
++      } catch { /* */ }
++      // 2R 27/10/2026 (Roger: «remover os ícones T (top) B (bottom), sendo que já tem dentro do BDV» / «remover o ícone
++      // borboleta do menu»): sai da barra salva uma vez; continuam disponíveis para pôr de volta
++      try {
++        if (!localStorage.getItem('2r-navbar-sem-lados')) {
++          for (const x of ['top', 'bottom', 'butterfly']) { const k = l.indexOf(x); if (k >= 0) l.splice(k, 1); }
++          for (let k = l.length - 1; k > 0; k--) if (l[k] === SEP && l[k - 1] === SEP) l.splice(k, 1);
++          localStorage.setItem('2r-navbar-sem-lados', '1'); localStorage.setItem(KEY, JSON.stringify(l));
++        }
++      } catch { /* */ }
++      // 11/10/2026: girar e espelhar tinham saído da barra — 23/10/2026 voltaram (padrão FlexBV); migração desligada
++      try {
++        if (R2_MIGRA_ROT_MOVED) {
+           const m = l.filter(x => x !== 'rotL' && x !== 'rotR' && x !== 'mirror');
+           localStorage.setItem('2r-navbar-rot-moved', '1'); localStorage.setItem(KEY, JSON.stringify(m));
+           return m;
+-- 
+2.43.0
+

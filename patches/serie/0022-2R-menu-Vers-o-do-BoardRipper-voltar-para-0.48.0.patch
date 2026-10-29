@@ -1,0 +1,44 @@
+From 1bccbac7d3d9f37cacd4952b2418258f0273e068 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 21:00:49 -0300
+Subject: [PATCH 22/22] =?UTF-8?q?2R:=20menu=20Vers=C3=A3o=20do=20BoardRipp?=
+ =?UTF-8?q?er=20(voltar=20para=200.48.0)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/frontend/src/components/MenuBar2R.tsx | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/frontend/src/components/MenuBar2R.tsx b/src/frontend/src/components/MenuBar2R.tsx
+index aff2cf2e..5bc27c73 100644
+--- a/src/frontend/src/components/MenuBar2R.tsx
++++ b/src/frontend/src/components/MenuBar2R.tsx
+@@ -18,6 +18,9 @@ import { stepPin } from '../r2/probe-seq';
+ import { NAVBAR_LAYOUT_KEY } from './NavBar2R';
+ 
+ type R2Telas = { set(papel: string, n: number): Promise<{ externas?: unknown[] } | null> };
++// 2R 28/10/2026: BoardRipper 0.50.2 em paralelo com o 0.48.0 — a chave fica no app (QSettings «boardview/versao_nova»)
++type R2Versao = { get(): Promise<{ on?: boolean; pasta?: string }>; set(on: boolean): Promise<{ on?: boolean }> };
++const r2Versao = (): R2Versao | undefined => (window as unknown as { __2rVersaoNova?: R2Versao }).__2rVersaoNova;
+ const r2Telas = (): R2Telas | undefined => (window as unknown as { __2rTelas?: R2Telas }).__2rTelas;
+ 
+ /**
+@@ -173,6 +176,13 @@ function menus(): { name: string; items: Entry[] }[] {
+       { label: 'Esquemático (PDF)…', run: () => openSettings2R('pdf') },
+       { label: 'Biblioteca local…', run: () => openSettings2R('server') },
+       { label: 'Desempenho…', run: () => openSettings2R('performance') },
++      'sep',
++      { head: 'Versão do BoardRipper' },
++      { label: 'Usar a versão anterior (0.48.0) na próxima abertura', run: () => {
++        const v = r2Versao();
++        if (!v) { boardStore.addToast('Esta troca só funciona dentro do SDS.', 'info'); return; }
++        void v.set(false).then(() => boardStore.addToast('Pronto: feche e abra o SDS para voltar ao BoardRipper 0.48.0. Para voltar a esta versão: Control+Option+Shift+N (Windows: Ctrl+Alt+Shift+N) no BoardRipper.', 'info'));
++      } },
+       { label: 'Voltar a barra de ícones ao padrão', run: () => { try { localStorage.removeItem(NAVBAR_LAYOUT_KEY); } catch { /* */ } location.reload(); } },
+     ] },
+     { name: 'Ajuda', items: [
+-- 
+2.43.0
+

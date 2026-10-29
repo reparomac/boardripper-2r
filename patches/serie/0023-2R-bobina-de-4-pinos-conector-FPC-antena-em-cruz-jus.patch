@@ -1,0 +1,227 @@
+From b0c7545476f4ca0bb6efc3a98d01f165d10e01da Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 21:37:45 -0300
+Subject: [PATCH] =?UTF-8?q?2R:=20bobina=20de=204=20pinos,=20conector=20FPC?=
+ =?UTF-8?q?,=20antena=20em=20cruz=20justa,=20m=C3=A1scara=20na=20borda=20d?=
+ =?UTF-8?q?a=20placa=20(28/10/2026)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/frontend/src/r2/hand-geom.ts         | 89 +++++++++++++++++++++++-
+ src/frontend/src/renderer/board-scene.ts | 52 +++++++++++++-
+ 2 files changed, 136 insertions(+), 5 deletions(-)
+
+diff --git a/src/frontend/src/r2/hand-geom.ts b/src/frontend/src/r2/hand-geom.ts
+index 9c59212c..c0908678 100644
+--- a/src/frontend/src/r2/hand-geom.ts
++++ b/src/frontend/src/r2/hand-geom.ts
+@@ -817,7 +817,7 @@ function R2shunt(b) {
+         mn = Math.min(...g.map((u) => u.d));
+       if (mn < md * 0.6) continue;
+       if (R2J && g.some((u) => Math.abs(Math.sin(2 * u.a)) > 0.25)) continue;
+-      const rr = R2J ? mp * 0.4 : mp * 0.3;
++      const rr = R2J ? mp * 0.3 : mp * 0.3; /*2R 28/10/2026 (Roger aprovou o mockup do JL120/JL121 da 820-03285): conector em cruz com pads 25% menores (0,4 → 0,3 do lado)*/
+       for (const u of g) {
+         const q = u.q,
+           x = q.position.x,
+@@ -830,7 +830,7 @@ function R2shunt(b) {
+         delete q.padPolygon;
+         delete q.padCornerRadius;
+       }
+-      const k = (R2J ? 2 : 1.6) * rr;
++      const k = (R2J ? 0.6 : 1.6) * rr; /*28/10: losango justo nos pinos (antes 2 × o raio de margem, passava da borda da placa)*/
+       P.__r2poly = g.map((u) => [
+         cx + (u.q.position.x - cx) * (1 + k / u.d),
+         cy + (u.q.position.y - cy) * (1 + k / u.d),
+@@ -1376,6 +1376,88 @@ function R2drmos2(P) {
+   P.__r2drmos = 2;
+   return !0;
+ }
++/*2R 28/10/2026 (print do Roger, L8111/L8112/L8241 da 820-03285 — «as bobinas estão maiores»; mockup aprovado: «os pads… prefiro manter único, não nos cantos, mas pode alterar o tamanho»): bobina dupla de 4 pinos em 2×2 (dois pinos de um lado, dois do outro). Um pad único por lado (os dois pinos do mesmo lado juntos, ao longo do lado curto) e o corpo justo em volta dos pinos, com a redução das bobinas de 2 pinos. window.__r2Bob4Off=true desliga*/ function R2bob4(b) {
++  if (!b || !b.parts || window.__r2Bob4Off === !0) return;
++  for (const P of b.parts) {
++    try {
++      if (!P || !P.pins || P.pins.length !== 4 || !/^L/i.test(P.name || "") || P.__r2shunt || P.__r2pads) continue;
++      if (P.pins.some((q) => !q || !q.position || q.padBounds)) continue;
++      const xs = P.pins.map((q) => q.position.x), ys = P.pins.map((q) => q.position.y);
++      const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
++      const dx = x1 - x0, dy = y1 - y0;
++      if (!(dx > 0 && dy > 0)) continue;
++      const tx = dx * 0.1, ty = dy * 0.1;
++      if (!P.pins.every((q) => (Math.abs(q.position.x - x0) < tx || Math.abs(q.position.x - x1) < tx) && (Math.abs(q.position.y - y0) < ty || Math.abs(q.position.y - y1) < ty))) continue;
++      const vert = dy <= dx; /*lado curto na vertical: cada lado (esquerdo/direito) tem 2 pinos empilhados*/
++      const s = vert ? dy : dx, l = vert ? dx : dy;
++      const rq = Math.max(...P.pins.map((q) => q.radius || 0));
++      const r = Math.min(rq > 0 ? rq : s * 0.35, s * 0.4, l * 0.3);
++      const a = r * 0.6, h = s / 2 + r * 0.8; /*pad: meia largura (lado longo) e meio comprimento (lado curto)*/
++      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
++      for (const q of P.pins) {
++        const left = vert ? q.position.x < cx : q.position.y < cy;
++        const c = vert ? (left ? x0 : x1) : (left ? y0 : y1);
++        q.padBounds = vert
++          ? { minX: c - a, minY: cy - h, maxX: c + a, maxY: cy + h }
++          : { minX: cx - h, minY: c - a, maxX: cx + h, maxY: c + a };
++        delete q.padShape;
++        delete q.padWidth; delete q.padHeight; delete q.padAngleDeg; delete q.padPolygon; delete q.padCornerRadius;
++      }
++      const eL = r * 0.8, eS = r * 0.9;
++      P.__r2corpo = vert
++        ? { x: x0 - eL, y: y0 - eS, w: dx + 2 * eL, h: dy + 2 * eS }
++        : { x: x0 - eS, y: y0 - eL, w: dx + 2 * eS, h: dy + 2 * eL };
++      P.__r2shunt = 1;
++      P.__r2pads = 1;
++    } catch (e) {}
++  }
++}
++/*2R 28/10/2026 (print do Roger, J5150 da 820-03285; mockup aprovado): conector FPC / placa-placa de duas fileiras (J…, 8 pinos ou mais). O corpo do arquivo ficava só entre as fileiras, com os pads pequenos para fora. Agora: pads finos na medida do passo (0,6 do passo) e um pouco mais compridos, pinos de fixação soltos no meio viram pads retangulares maiores, e o corpo cobre as duas fileiras com 0,15 mm de folga. window.__r2FpcOff=true desliga*/ function R2fpc(P, U, p) {
++  try {
++    if (window.__r2FpcOff === !0 || !/^J/i.test(P.name || "") || P.pins.length < 8) return;
++    const fil = U.filter((u) => !u.mid && u.n === 1);
++    if (fil.length < 6) return;
++    const hz = fil.filter((u) => u.h && !u.v).length, vt = fil.filter((u) => u.v && !u.h).length;
++    const o = hz >= vt ? "h" : "v";
++    const key = (u) => Math.round((o === "h" ? u.y : u.x) / Math.max(p * 0.5, 1e-6));
++    const rows = new Map();
++    for (const u of fil) rows.set(key(u), (rows.get(key(u)) || 0) + 1);
++    const big = [...rows.entries()].filter((e) => e[1] >= 3).map((e) => e[0]).sort((a, b) => a - b);
++    if (big.length !== 2) return;
++    const cs = fil.filter((u) => big.includes(key(u))).map((u) => (o === "h" ? u.y : u.x));
++    const r0 = Math.min(...cs), r1 = Math.max(...cs), gap = r1 - r0;
++    if (!(gap > p)) return;
++    const S = p * 0.6, L = Math.min(p * 1.6, gap * 0.35);
++    for (const u of fil) {
++      if (!big.includes(key(u))) continue;
++      for (const q of u.pins) {
++        q.padBounds = o === "h"
++          ? { minX: u.x - S / 2, minY: u.y - L / 2, maxX: u.x + S / 2, maxY: u.y + L / 2 }
++          : { minX: u.x - L / 2, minY: u.y - S / 2, maxX: u.x + L / 2, maxY: u.y + S / 2 };
++        delete q.padShape;
++      }
++    }
++    for (const u of U) {
++      if (!u.mid) continue;
++      const ha = p * 0.65, hb = Math.min(gap * 0.26, p * 2);
++      for (const q of u.pins) {
++        q.padBounds = o === "h"
++          ? { minX: u.x - ha, minY: u.y - hb, maxX: u.x + ha, maxY: u.y + hb }
++          : { minX: u.x - hb, minY: u.y - ha, maxX: u.x + hb, maxY: u.y + ha };
++        delete q.padShape;
++      }
++    }
++    let a0 = 1 / 0, b0 = 1 / 0, a1 = -1 / 0, b1 = -1 / 0;
++    for (const q of P.pins) {
++      const B = q.padBounds;
++      if (!B) continue;
++      a0 = Math.min(a0, B.minX); b0 = Math.min(b0, B.minY); a1 = Math.max(a1, B.maxX); b1 = Math.max(b1, B.maxY);
++    }
++    if (!isFinite(a0)) return;
++    const g = 0.15 * 39.37;
++    P.__r2corpo = { x: a0 - g, y: b0 - g, w: a1 - a0 + 2 * g, h: b1 - b0 + 2 * g };
++  } catch (e) {}
++}
+ function R2pads(b) {
+   /*2R 20/10/2026 (Roger): «todos os pads como no componente físico» — o arquivo só traz o centro do pino; o formato é deduzido: pinos de borda em fila viram pads retangulares (com folga entre eles), vários pinos no mesmo ponto viram um pad de potência maior e pino solto no meio fica redondo. BGA (grade) continua redondo. Liga/desliga: window.__r2PadsOff*/ if (
+     !b ||
+@@ -1580,6 +1662,7 @@ function R2pads(b) {
+         for (const q of u.pins) q.padBounds = { minX: u.x - L, minY: u.y - T, maxX: u.x + Rr, maxY: u.y + Bb };
+       }
+     }
++    R2fpc(P, U, p);
+     P.__r2shunt = 1;
+     P.__r2pads = 1;
+   }
+@@ -1824,4 +1907,4 @@ function R2pads(b) {
+   } catch (e) {}
+ }
+ 
+-export { R2centro, R2viz, R2tam, R2lado, R2mira, R2raio, R2rEf, R2caixa, R2claro, R2drmosGiro, R2margem, R2pk, R2grande, R2uf, R2kf, R2cap4, R2gira, R2shunt, R2faixa, R2drmos, R2drmos2, R2pads, R2contorno };
++export { R2centro, R2viz, R2tam, R2lado, R2mira, R2raio, R2rEf, R2caixa, R2claro, R2drmosGiro, R2margem, R2pk, R2grande, R2uf, R2kf, R2cap4, R2gira, R2shunt, R2faixa, R2drmos, R2drmos2, R2pads, R2contorno, R2bob4, R2fpc };
+diff --git a/src/frontend/src/renderer/board-scene.ts b/src/frontend/src/renderer/board-scene.ts
+index e4f67a16..692e49d6 100644
+--- a/src/frontend/src/renderer/board-scene.ts
++++ b/src/frontend/src/renderer/board-scene.ts
+@@ -43,7 +43,7 @@ import { capsuleParams, isOblongRoundPad, capsuleGrowForRadius, type CapsulePara
+ import { defaultLayerColor } from '../store/layer-store';
+ import { themeStore, hexToInt } from '../store/themes';
+ import { r2PadsColoridos, r2Mesa, r2XwOculto } from '../r2/hand-flags';
+-import { R2centro, R2viz, R2caixa, R2claro, R2pk, R2grande, R2kf, R2cap4, R2gira, R2shunt, R2pads, R2contorno } from '../r2/hand-geom';
++import { R2centro, R2viz, R2caixa, R2claro, R2pk, R2grande, R2kf, R2cap4, R2gira, R2shunt, R2pads, R2contorno, R2bob4 } from '../r2/hand-geom';
+ /* eslint-disable @typescript-eslint/no-explicit-any */
+ const r2win = window as any;
+ 
+@@ -714,6 +714,53 @@ export function resolveBoardFillColor(metadataHex: string | undefined, useMetada
+   return BOARD_COLORS.boardFillDefault;
+ }
+ 
++/** 2R 28/10/2026 (Roger, 820-03285: «outros saindo fora da placa»; mockup aprovado): nada de componente desenhado fora do
++ *  contorno da placa — cada lado (TOP/BOTTOM) ganha uma máscara com o contorno. Só quando o contorno veio do arquivo
++ *  (não o aproximado do R2contorno), é fechado, e pelo menos 98% dos pinos daquele lado estão dentro dele (contorno
++ *  deslocado ou de outra placa não pode esconder peças). window.__r2BordaOff=true desliga. */
++function r2MascaraBorda(board: BoardData, topLayer: Container, bottomLayer: Container): void {
++  try {
++    if (r2win.__r2BordaOff === true || (board as any).__r2contorno) return;
++    const pts = board.outline;
++    if (!pts || pts.length < 4) return;
++    const cs: { x: number; y: number }[][] = [];
++    let cur: { x: number; y: number }[] = [];
++    const flush = () => { if (cur.length >= 3) cs.push(cur); cur = []; };
++    for (const p of pts) { if (isNaN(p.x) || isNaN(p.y)) { flush(); continue; } cur.push(p); }
++    flush();
++    const closed = cs.filter(c => { const a = c[0], z = c[c.length - 1]; return Math.hypot(z.x - a.x, z.y - a.y) < CLOSE_EPS; });
++    if (!closed.length || closed.length !== cs.length) return;
++    const largest = closed.reduce((m, c) => (c.length > m.length ? c : m), closed[0]);
++    if (largest.length < 8) return;
++    const dentro = (x: number, y: number) => {
++      let ins = false;
++      for (const c of closed) {
++        for (let i = 0, j = c.length - 1; i < c.length; j = i++) {
++          const a = c[i], b = c[j];
++          if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) ins = !ins;
++        }
++      }
++      return ins;
++    };
++    const bb = (c: { x: number; y: number }[]) => computeBBox(c);
++    const LB = bb(largest);
++    const pecas = closed.filter(c => c === largest || (() => { const b = bb(c); return !(b.minX >= LB.minX && b.maxX <= LB.maxX && b.minY >= LB.minY && b.maxY <= LB.maxY); })());
++    for (const [lado, layer] of [['top', topLayer], ['bottom', bottomLayer]] as const) {
++      let n = 0, ok = 0;
++      for (const part of board.parts) {
++        if ((part as any).side !== lado) continue;
++        for (const q of part.pins) { n++; if (dentro(q.position.x, q.position.y)) ok++; }
++      }
++      if (n < 20 || ok / n < 0.98) continue;
++      const g = new Graphics();
++      g.label = 'r2-mascara-borda-' + lado;
++      for (const c of pecas) { g.poly(c, true); g.fill({ color: 0xffffff }); }
++      layer.addChild(g);
++      layer.mask = g;
++    }
++  } catch { /* sem máscara */ }
++}
++
+ export function drawOutline(gfx: Graphics, board: BoardData, s: RenderSettings, metadataHex?: string): void {
+   const pts = board.outline;
+   if (pts.length <= 1) return;
+@@ -874,7 +921,7 @@ export function buildBoardScene(
+   // is what the user sees as a horizontal row — and that's the run that needs
+   // the label stagger.
+   // 2R 20/10 a 27/10/2026: contorno externo, shunt/cristal/conector, capacitor de 4 terminais, pads físicos, CI girado
+-  R2contorno(board); R2shunt(board); R2cap4(board); R2pads(board); R2gira(board);
++  R2contorno(board); R2shunt(board); R2cap4(board); R2bob4(board); R2pads(board); R2gira(board);
+   const rot90 = ((Math.round(viewRotationDeg / 90) % 4) + 4) % 4;
+   const axesSwapped = rot90 === 1 || rot90 === 3;
+   // Sign that turns "even → visually above the pin" into a board-space offset.
+@@ -1330,6 +1377,7 @@ export function buildBoardScene(
+   root.addChild(topLayer);
+ 
+   drawOutline(outlineGfx, board, s, metadataHex);
++  r2MascaraBorda(board, topLayer, bottomLayer);
+ 
+   // ── Spatial grid for pin/triangle culling ────────────────────────────────────
+   // Divide the board into NxN cells. Each cell has its own color-batched pin
+-- 
+2.43.0
+

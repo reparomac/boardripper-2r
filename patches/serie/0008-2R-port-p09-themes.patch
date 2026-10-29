@@ -1,0 +1,417 @@
+From 85a6c297a0908186960c0742fba7e38e01b721d3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:29:47 -0300
+Subject: [PATCH 08/22] 2R port p09 themes
+
+---
+ src/frontend/src/store/themes.ts | 359 ++++++++++++++++++++++++++++++-
+ 1 file changed, 349 insertions(+), 10 deletions(-)
+
+diff --git a/src/frontend/src/store/themes.ts b/src/frontend/src/store/themes.ts
+index 7bc90220..1e0f6a76 100644
+--- a/src/frontend/src/store/themes.ts
++++ b/src/frontend/src/store/themes.ts
+@@ -160,6 +160,321 @@ const DARK_UI: Theme['ui'] = {
+ };
+ 
+ export const THEMES: Record<string, Theme> = {
++  // 2R 18/10/2026 (tema do RastreCurve) e 20/10/2026 (Âmbar = cores do FlexBV, escuro padrão)
++    "2r-rastre": {
++      id: "2r-rastre",
++      label: "2R Tools — RastreCurve",
++      ui: {
++        bgPrimary: "#0e0f11",
++        bgSecondary: "#16171a",
++        bgTertiary: "#1c1d21",
++        textPrimary: "#e6e6e6",
++        textSecondary: "#9a9da5",
++        accent: "#4a4d55",
++        border: "#2a2c31",
++        iconBoardBg: "#3a3d44",
++        iconPdfBg: "#3a3d44",
++      },
++      board: {
++        canvasBackground: "#08090A",
++        boardFill: "#25282C",
++        outline: "#B4B8BE",
++        selection: "#ffffff",
++        butterflySelection: "#44aaff",
++        labelText: "#ffffff",
++        labelPart: "#8A8D93",
++        labelNet: "#88ccff",
++        netLabelBg: "#000000",
++        netLabelBgOpacity: 0.6,
++      },
++      boardOverrides: {
++        showSelectionHalo: false,
++        hdrFocusGlow: false,
++        ambientDim: false,
++        boardFillAlpha: 1,
++        showComponentColors: false,
++        componentFillAlpha: 0,
++        partTypes: [
++          {
++            id: "resistor",
++            label: "Resistor",
++            prefixes: ["R", "PR", "PH"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "capacitor",
++            label: "Capacitor",
++            prefixes: ["C", "PC"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "inductor",
++            label: "Inductor",
++            prefixes: ["L", "PL", "B"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "diode",
++            label: "Diode",
++            prefixes: ["D", "PD", "Z", "PZ"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "crystal",
++            label: "Crystal",
++            prefixes: ["Y", "X"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "transistor",
++            label: "Transistor",
++            prefixes: ["Q", "PQ"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "ic",
++            label: "IC",
++            prefixes: ["U", "PU"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "connector",
++            label: "Connector",
++            prefixes: ["J", "SW"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "fuse",
++            label: "Fuse",
++            prefixes: ["F"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "testpoint",
++            label: "Test Point",
++            prefixes: ["TP"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "shield",
++            label: "Shield",
++            prefixes: ["SH", "MEC"],
++            color: "#25282C",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++        ],
++        pinGroups: [{ id: "misc", label: "Misc", outlineOnly: false, rules: [] }],
++        netColorRules: [],
++        defaultPinColorTop: "#8A8D93",
++        defaultPinColorBottom: "#8A8D93",
++        netLineAlpha: 0,
++        showPin1Marker: false,
++        showDiodeValues: false,
++        showNetNames: false,
++        showPinNumbers: false,
++        showPartLabels: true,
++        partLabelScale: 1.15,
++        labelMinScreenPx: 3,
++        labelHideThreshold: 1,
++        partLabelShadow: true,
++        outlineWidth: 1.2,
++        outlineAlpha: 0.95,
++        partBorderAlpha: 0,
++        partBorderWidth: 1,
++        pinAlpha: 0.5,
++      },
++    },
++    "2r-ambar": {
++      id: "2r-ambar",
++      label: "2R Tools — Âmbar",
++      ui: {
++        bgPrimary: "#0e0f11",
++        bgSecondary: "#16171a",
++        bgTertiary: "#1c1d21",
++        textPrimary: "#e6e6e6",
++        textSecondary: "#9a9da5",
++        accent: "#4a4d55",
++        border: "#2a2c31",
++        iconBoardBg: "#3a3d44",
++        iconPdfBg: "#3a3d44",
++      },
++      board: {
++        canvasBackground: "#151412",
++        boardFill: "#211F1B",
++        outline: "#4a463f",
++        selection: "#ffffff",
++        butterflySelection: "#44aaff",
++        labelText: "#ffffff",
++        labelPart: "#CB9347",
++        labelNet: "#88ccff",
++        netLabelBg: "#000000",
++        netLabelBgOpacity: 0.6,
++      },
++      boardOverrides: {
++        showSelectionHalo: false,
++        hdrFocusGlow: false,
++        ambientDim: false,
++        boardFillAlpha: 1,
++        showComponentColors: true,
++        componentFillAlpha: 1,
++        partTypes: [
++          {
++            id: "resistor",
++            label: "Resistor",
++            prefixes: ["R", "PR", "PH"],
++            color: "#1F1F1F",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: true,
++          },
++          {
++            id: "capacitor",
++            label: "Capacitor",
++            prefixes: ["C", "PC"],
++            color: "#5C4A3F",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "inductor",
++            label: "Inductor",
++            prefixes: ["L", "PL", "B"],
++            color: "#2D2D2D",
++            padShape: "natural",
++            bodyShape: "square",
++            hidden: false,
++            hierarchyBridge: true,
++          },
++          {
++            id: "diode",
++            label: "Diode",
++            prefixes: ["D", "PD", "Z", "PZ"],
++            color: "#2D2D2D",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: true,
++          },
++          {
++            id: "crystal",
++            label: "Crystal",
++            prefixes: ["Y", "X"],
++            color: "#2D2D2D",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "transistor",
++            label: "Transistor",
++            prefixes: ["Q", "PQ"],
++            color: "#2D2D2D",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "ic",
++            label: "IC",
++            prefixes: ["U", "PU"],
++            color: "#2D2D2D",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "connector",
++            label: "Connector",
++            prefixes: ["J", "SW"],
++            color: "#2D2D2D",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "fuse",
++            label: "Fuse",
++            prefixes: ["F"],
++            color: "#2D2D2D",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "testpoint",
++            label: "Test Point",
++            prefixes: ["TP"],
++            color: "#8B7334",
++            padShape: "round",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++          {
++            id: "shield",
++            label: "Shield",
++            prefixes: ["SH", "MEC"],
++            color: "#2D2D2D",
++            padShape: "natural",
++            bodyShape: "natural",
++            hidden: false,
++            hierarchyBridge: false,
++          },
++        ],
++        partBorderAlpha: 0.9,
++      },
++    },
+   // 2R Tools (Roger, 10/10/2026): «tudo neutro, com cara de programa profissional».
+   // Cinza grafite na interface, placa em preto e branco, sem cor de componente
+   // nem de net. A seleção fica branca (o padrão da casa: selecionado = branco).
+@@ -179,6 +494,35 @@ export const THEMES: Record<string, Theme> = {
+     },
+     // placa com as cores de verdade (Roger 10/10/2026: «no BDV tem que deixar a cor
+     // da placa, sem efeito de luz») — só a interface fica neutra
++    // 2R 18/10/2026: placa escura (o anterior virou «2r-clean-antigo»)
++    board: {
++      canvasBackground:   '#000000',
++      boardFill:          '#2a2a2a',
++      outline:            '#45484a',
++      selection:          '#ffffff',
++      butterflySelection: '#44aaff',
++      labelText:          '#ffffff',
++      labelPart:          '#cccccc',
++      labelNet:           '#88ccff',
++      netLabelBg:         '#000000',
++      netLabelBgOpacity:  0.6,
++    },
++    boardOverrides: { showSelectionHalo: false, hdrFocusGlow: false, ambientDim: false, boardFillAlpha: 1 },
++  },
++  '2r-clean-antigo': {
++    id: '2r-clean-antigo',
++    label: '2R Tools — Neutro (anterior)',
++    ui: {
++      bgPrimary:     '#0e0f11',
++      bgSecondary:   '#16171a',
++      bgTertiary:    '#1c1d21',
++      textPrimary:   '#e6e6e6',
++      textSecondary: '#9a9da5',
++      accent:        '#4a4d55',
++      border:        '#2a2c31',
++      iconBoardBg:   '#3a3d44',
++      iconPdfBg:     '#3a3d44',
++    },
+     board: {
+       canvasBackground:   '#050508',
+       boardFill:          '#ffffff',
+@@ -191,12 +535,7 @@ export const THEMES: Record<string, Theme> = {
+       netLabelBg:         '#000000',
+       netLabelBgOpacity:  0.6,
+     },
+-    // sem efeito de luz: sem auréola na seleção, sem brilho HDR e sem escurecer a placa
+-    boardOverrides: {
+-      showSelectionHalo: false,
+-      hdrFocusGlow:      false,
+-      ambientDim:        false,
+-    },
++    boardOverrides: { showSelectionHalo: false, hdrFocusGlow: false, ambientDim: false },
+   },
+   // 2R Tools — variantes do tema padrão (Roger, 10/10/2026 23:13): «um pouco mais claro,
+   // placa puxando para o verde oliva; outro com a placa mais para o marrom; outro cinza/grafite…
+@@ -287,7 +626,7 @@ export const THEMES: Record<string, Theme> = {
+     },
+     board: {
+       // 2R (Roger, 11/10/2026): fundo claro também nos temas médios — «está preto»
+-      canvasBackground:   '#b9bdc2',
++      canvasBackground:   '#1b1d21', // 2R: fundo escuro no Grafite
+       boardFill:          '#8a8f96',
+       outline:            '#4a4f56',
+       selection:          '#1f2023',
+@@ -728,7 +1067,7 @@ function loadFromStorage(): string {
+     }
+     if (w2.__2rAcervo && w2.__2rTheme) {
+       const light = w2.__2rTheme !== 'dark';
+-      const def = light ? (w2.__2rTheme === 'gold' || w2.__2rTheme === 'light' ? '2r-claro-areia' : '2r-claro-gelo') : '2r-clean';
++      const def = light ? (w2.__2rTheme === 'gold' || w2.__2rTheme === 'light' ? '2r-claro-areia' : '2r-claro-gelo') : '2r-ambar'; // 2R 20/10/2026: Âmbar é o escuro padrão
+       const pick = localStorage.getItem(light ? '2r-theme-light' : '2r-theme-dark') || def;
+       if (THEMES[pick]) {
+         localStorage.setItem('2r-clean-theme-v2', '1'); localStorage.setItem('2r-clean-theme', '1');
+@@ -741,8 +1080,8 @@ function loadFromStorage(): string {
+     if ((window as unknown as { __2rAcervo?: unknown }).__2rAcervo && localStorage.getItem('2r-clean-theme-v2') !== '1') {
+       localStorage.setItem('2r-clean-theme-v2', '1');
+       localStorage.setItem('2r-clean-theme', '1');
+-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeId: '2r-clean' } as PersistedTheme));
+-      return '2r-clean';
++      localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeId: '2r-ambar' } as PersistedTheme));
++      return '2r-ambar';
+     }
+   } catch { /* sem armazenamento */ }
+   try {
+-- 
+2.43.0
+

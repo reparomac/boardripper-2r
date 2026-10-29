@@ -4,59 +4,43 @@
 License: GNU Affero General Public License v3.0 (see `LICENSE`).
 
 This repository is the **customized version of BoardRipper** that ships inside
-**2R Tools — Scanner Diagnostic Suite** (free plan, worldwide). It is published here
-to comply with the AGPL-3.0 and to give credit and code back to the community.
+**2R Tools — Scanner Diagnostic Suite**. It is published here to comply with the AGPL-3.0
+and to give credit and code back to the community.
 
-- Base: upstream **v0.48.0**, commit `1cef96edd114c95e1080a9dbec4dfb711df86e2c`
-- Server: upstream Go backend + `patches/0001-bind-host.patch`
+- Base: upstream **v0.50.2** (tag `v0.50.2`, commit `cdfe126b`)
+- Server: upstream Go backend (unchanged between 0.48.0 and 0.50.2) + `patches/0001-bind-host.patch`
+- Previous edition (base v0.48.0): kept in `patches/0.48.0/`
 
 ## Contents
 
 | Path | What it is |
 |---|---|
-| `webapp/` | The modified web app exactly as shipped in 2R Tools (compiled build) |
-| `patches/2rtools-boardripper-0.48.0.patch` | Source patch over v0.48.0 (backend `main.go`, frontend `App.tsx`, …) |
-| `patches/2rtools-customizacoes-0.48.0.patch` | 2R customizations applied to the bundle |
-| `patches/ponto_a_ponto_m3.patch` | Point-to-point measurement mode |
-| `patches/GuidePanel.tsx`, `patches/logo2r-print.ts` | New 2R source files |
+| `webapp/` | The modified web app exactly as shipped in 2R Tools (compiled build + 2R scripts in `index.html`) |
+| `patches/2rtools-0.50.2-completo.patch` | **All** 2R changes as one source patch over tag `v0.50.2` (`git apply` at the repo root) |
+| `patches/serie/` | The same changes split into steps (`git am patches/serie/*.patch`) |
+| `patches/fonte-modificado-0.50.2.tar.gz` | The modified source files, ready to compare |
+| `patches/REFAZER_BOARDRIPPER_0.50.2.command` | Rebuilds the web app and the server from upstream (needs git, node and go) |
 | `patches/0001-bind-host.patch` | Server: listen only on `BIND_HOST` (2R uses 127.0.0.1) |
+| `patches/0.48.0/` | Patches of the previous edition (base v0.48.0) |
 | `2r/boardripper_tr.json` | Extra English / Spanish translations injected by 2R Tools |
 | `notes/` | How each change is re-applied when upgrading upstream (Portuguese) |
 | `THIRD_PARTY.md` | Third-party libraries used by BoardRipper |
 
 ## Main 2R changes
 
-- FlexBV-style controls: mirror on `M`, pin filter and sorting
-- Point-to-point measurement with sticky notes
-- Compact net color legend
-- TOP / BOTTOM / BUTTERFLY toolbar that never overlaps side panels
-- Guide panel and 2R print header
+- FlexBV-style controls (toolbar, mouse wheel zoom, trackpad), keyboard shortcuts (N / Shift+N, Ctrl+←/→)
+- Board search on top of the board and PDF search inside the PDF (Exact | Broad), PDF at 1/4 of the screen
+- Point-to-point measurement with sticky notes, groups and expected values
+- TOP / BOTTOM / BUTTERFLY buttons in the net-line colors (yellow / light blue), reference crosshair, minimap always available
+- Physical component drawing: real pads, tight IC outlines, rotated ICs, DrMOS, shunts, crystals, 4-terminal capacitors,
+  4-pin coupled inductors with round pads, two-row FPC connectors, cross-shaped antenna connectors, nothing drawn
+  outside the board outline
+- Diode cards on pads, name + value inside the component
+- 2R themes, OBD (OpenBoardData) refresh button with progress/result animation, no white flash on load
 - Extra EN/ES translations, language switch without restart
 - Server bound to localhost only
 
 ## Build
 
-Clone upstream at the base commit, apply the patches, then build as the original
-project documents (`npm run build:desktop-webapp` in `src/frontend`; Go backend in `src/backend`).
-
-```
-git clone https://github.com/AlexeyInwerp/BoardRipper && cd BoardRipper
-git checkout 1cef96edd114c95e1080a9dbec4dfb711df86e2c
-git apply ../boardripper-2r/patches/2rtools-boardripper-0.48.0.patch
-git apply ../boardripper-2r/patches/0001-bind-host.patch
-```
-
-Some 2R changes were made directly on the compiled bundle; the full result is in `webapp/`
-and each step is described in `notes/`.
-
----
-
-## Português
-
-**O BoardRipper é de Alexey Lavrov** (https://github.com/AlexeyInwerp/BoardRipper), licença AGPL-3.0.
-Este repositório é a **versão customizada pela 2R Tools**, com várias ideias novas, que vem
-de graça no 2R Tools — Scanner Diagnostic Suite. Base: v0.48.0 (commit `1cef96e`).
-Todo o código modificado está aqui: `webapp/` (versão usada no app), `patches/` (alterações)
-e `notes/` (como reaplicar ao atualizar).
-
-2R Tools — https://www.2rtools.com.br
+Clone upstream at tag `v0.50.2`, apply `patches/2rtools-0.50.2-completo.patch`, then build as the original
+project documents (`npx vite build --base ./` in `src/frontend`; Go backend in `src/backend` with the bind-host patch).

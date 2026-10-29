@@ -1,0 +1,575 @@
+From 97558e37b454bea1ec218ed6cc7ad6d2b111cf2c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:38:14 -0300
+Subject: [PATCH 13/22] 2R port p15 PDF viewer
+
+---
+ src/frontend/src/panels/PdfViewerPanel.tsx | 400 ++++++++++++---------
+ src/frontend/src/renderer/BoardRenderer.ts |   6 +-
+ 2 files changed, 235 insertions(+), 171 deletions(-)
+
+diff --git a/src/frontend/src/panels/PdfViewerPanel.tsx b/src/frontend/src/panels/PdfViewerPanel.tsx
+index 3859b2f2..65754cdf 100644
+--- a/src/frontend/src/panels/PdfViewerPanel.tsx
++++ b/src/frontend/src/panels/PdfViewerPanel.tsx
+@@ -25,7 +25,11 @@ import { drawGlyphBoxes, drawGlyphOutlines, drawTextItems } from '../pdf/glyph-o
+ import { drawSimplifiedGlyphs } from '../pdf/glyph-simplifier';
+ import type { SimplifyStats } from '../pdf/glyph-simplifier';
+ import { drawMonospaceReplacement } from '../pdf/glyph-replacer';
+-import { IconArrowAutofitWidth, IconBookmarkPlus, IconHandMove, IconZoomIn, IconRotateClockwise, IconFileStack, IconFile, IconSwitchHorizontal } from '@tabler/icons-react';
++import { IconArrowAutofitWidth, IconBookmarkPlus, IconHandMove, IconZoomIn, IconZoomOut, IconFileStack, IconFile, IconSwitchHorizontal } from '@tabler/icons-react';
++import { pointerMode, mouseZoomSpeed, trackpadDirect } from '../renderer/BoardRenderer';
++import { r2LadoPeca } from '../r2/guide-store';
++/* eslint-disable @typescript-eslint/no-explicit-any */
++const r2w = window as any;
+ import {
+   TILE_SIZE, computeTileGrid, tileRenderRequest,
+   getTileCached, putTileCached, invalidateTileCache,
+@@ -1208,7 +1212,8 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+     if (pageW <= containerW) {
+       x = (containerW - pageW) / 2; // page fits — centered
+     } else {
+-      const margin = singlePage ? SINGLE_PAGE_MARGIN : 0;
++      // 2R 25/10/2026: folga de meia tela nas bordas para o resultado sempre ficar no centro (window.__r2PdfCentro=false desliga)
++      const margin = r2w.__r2PdfCentro !== false ? Math.max(singlePage ? SINGLE_PAGE_MARGIN : 0, containerW / 2) : singlePage ? SINGLE_PAGE_MARGIN : 0;
+       x = Math.max(containerW - pageW - margin, Math.min(margin, x));
+     }
+ 
+@@ -1840,6 +1845,8 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+       if (err instanceof Error && err.message?.includes('cancel')) {
+         return;
+       }
++      // 2R: painel com tamanho zero (escondido/redimensionando) — tenta de novo depois, sem mostrar erro
++      if (/width or height of 0|InvalidStateError/.test(String(err))) { setTimeout(() => window.dispatchEvent(new Event('resize')), 250); return; }
+       log.pdf.error('renderPage failed:', err);
+       // The panel shows the error; the load indicator must not stay up.
+       pdfStore.endLoad(pdfFileName);
+@@ -2217,6 +2224,7 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+       }
+     } catch (err) {
+       if (err instanceof Error && err.message?.includes('cancel')) return;
++      if (/width or height of 0|InvalidStateError/.test(String(err))) { setTimeout(() => window.dispatchEvent(new Event('resize')), 250); return; }
+       log.pdf.error('renderTiledPage failed:', err);
+       setError(String(err));
+     }
+@@ -2311,10 +2319,12 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+       const { x, y, w, h } = textItemRect(match.item.transform, match.item.width, vpT, scale);
+ 
+       const isActive = activeMatchSet.has(match);
++      // 2R 25/10/2026 (Roger: «sem rosa piscando… tipo marca-texto»; 00h06: «verde nas outras e no selecionado o amarelo»)
++      void blinkHide;
+       if (isActive) {
+-        hCtx.fillStyle = blinkHide ? 'rgba(220, 30, 30, 0.5)' : 'rgba(255, 170, 0, 0.4)';
++        hCtx.fillStyle = 'rgba(214, 255, 0, 0.55)';
+       } else {
+-        hCtx.fillStyle = 'rgba(255, 255, 68, 0.3)';
++        hCtx.fillStyle = 'rgba(57, 255, 20, 0.32)';
+       }
+       hCtx.fillRect(x, y, w, h);
+     }
+@@ -2693,7 +2703,8 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+         }
+       }
+ 
+-      if (!alreadyInView) {
++      // 2R 25/10/2026: «cruz de referência invisível» — o resultado vai sempre para o centro (window.__r2PdfCentro=false desliga)
++      if (!alreadyInView || r2w.__r2PdfCentro !== false) {
+         // Match navigation: enforce a floor of max(currentZoom, 3.0) so we never
+         // zoom OUT when stepping between matches — stay at ≥300% or keep higher
+         // zoom if the user was already zoomed in further.
+@@ -2999,6 +3010,20 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+       // Always treat those as zoom — pinch is a fundamental gesture that should
+       // never be remapped by scroll binding settings.
+       const isTrackpadPinch = e.ctrlKey && !e.metaKey && !e.shiftKey;
++      // 2R 20/10/2026 (Roger): pinça de dois dedos no trackpad volta a dar zoom no PDF
++      const R2F = trackpadDirect() && pointerMode() === 'flexbv';
++      if (isTrackpadPinch) log.ui.log('pdf wheel pinch (ctrlKey)', { deltaY: e.deltaY });
++      // 2R 20/10/2026 (Roger): arrastar com dois dedos não pode virar zoom; só a pinça (ctrl) e a rodinha do mouse.
++      // 22/10/2026: no Windows com escala da tela a roda chega com deltaY quebrado — roda = wheelDeltaY múltiplo de 120
++      const R2T = (() => {
++        const w = (e as any).wheelDeltaY as number | undefined;
++        const tp = e.deltaX !== 0 || (w !== undefined && w !== 0 ? w % 120 !== 0 && (e.deltaY % 1 !== 0 || w === -3 * e.deltaY) : e.deltaY % 1 !== 0);
++        const ag = performance.now();
++        if (tp) r2w.__r2tpT = ag;
++        return tp || ag - (r2w.__r2tpT || 0) < 400;
++      })();
++      const R2N = !R2T && (e.deltaMode === 1 || ((e as any).wheelDeltaY !== undefined && (e as any).wheelDeltaY !== 0 && (e as any).wheelDeltaY % 120 === 0)
++        || (Math.abs(e.deltaY) >= 50 && e.deltaY % 1 === 0));
+ 
+       // Resolve effective action: trackpad pinch → always zoom, otherwise use bindings.
+       // No `wheelDetection` safety net here — on PDF, classic mouse-wheel scrolling
+@@ -3006,8 +3031,9 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+       // input looks wheel-shaped. (Safety net remains active on the board view,
+       // where there's no "next page" affordance.)
+       const bindings = scrollBindingsRef.current;
+-      const effectiveAction: ScrollAction = isTrackpadPinch
++      const effectiveAction: ScrollAction = isTrackpadPinch || (!e.metaKey && !e.shiftKey && !e.ctrlKey && e.deltaX === 0 && R2N)
+         ? 'zoom'
++        : R2F && !e.metaKey && !e.shiftKey ? 'pan'
+         : (e.metaKey || e.ctrlKey) ? bindings.meta
+         : e.shiftKey ? bindings.shift
+         : bindings.bare;
+@@ -3034,10 +3060,13 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+         // pinch event is far below the cap, and a mouse notch now zooms by
+         // about the same ~2.4x the board gives for Ctrl+wheel, which is the
+         // deliberate "Ctrl = coarse zoom" behaviour documented there.
+-        const speed = isTrackpadPinch ? TRACKPAD_PINCH_SPEED : MOUSE_WHEEL_SPEED;
++        const speed = isTrackpadPinch ? TRACKPAD_PINCH_SPEED
++          : R2F || R2N ? 0.0018 * (e.deltaMode === 1 || (Math.abs(e.deltaY) >= 50 && e.deltaY % 1 === 0)
++            ? mouseZoomSpeed() : parseFloat(localStorage.getItem('2r-flex-tp-zoom') || '8') || 8)
++          : MOUSE_WHEEL_SPEED;
+         const step = isTrackpadPinch
+           ? Math.max(-PINCH_STEP_CAP, Math.min(PINCH_STEP_CAP, e.deltaY))
+-          : e.deltaY;
++          : e.deltaY * (r2w.__r2RodaK ? r2w.__r2RodaK(e) : 1);
+         const zoomFactor = Math.exp(-step * speed);
+         const oldZoom = zoomRef.current;
+         const newZoom = Math.max(minZoom, Math.min(oldZoom * zoomFactor, 10));
+@@ -3568,6 +3597,7 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+       const upper = hit.word.toUpperCase();
+       const nav = { cause: 'lookup' as const, from: `${pdfFileName} · p.${hit.pageIndex + 1}` };
+       if (board.parts.some(p => p.name.toUpperCase() === upper)) {
++        r2LadoPeca(hit.word); // 2R 26/10/2026: peça no lado escondido → vira a placa para o lado dela
+         boardStore.focusPart(hit.word, nav);
+       } else {
+         boardStore.focusNet(hit.word, nav);
+@@ -3694,6 +3724,7 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+     // Walk items, pick the smallest bbox containing (cssX, cssY)
+     let bestStr = '';
+     let bestArea = Infinity;
++    let R2S: { x: number; y: number; w: number; h: number } | null = null, R2T = '';
+     for (const item of items) {
+       const r = textItemRect(item.transform, item.width, vpT, baseScale);
+       if (cssX >= r.x && cssX <= r.x + r.w && cssY >= r.y && cssY <= r.y + r.h) {
+@@ -3701,9 +3732,25 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+         if (area < bestArea) {
+           bestArea = area;
+           bestStr = item.str.trim();
++          R2S = r; R2T = item.str;
+         }
+       }
+     }
++    // 2R 20/10/2026 (Roger): botão direito / Control+clique numa linha, net ou endereço do PDF = procura no PDF
++    if (bestStr && R2S) {
++      const L = R2T.length || 1, P0 = Math.max(0, Math.min(L - 1, Math.floor(((cssX - R2S.x) / (R2S.w || 1)) * L)));
++      let W = '', M: RegExpExecArray | null;
++      const RX = /[A-Za-z0-9_][A-Za-z0-9_\-+./]*/g;
++      while ((M = RX.exec(R2T))) {
++        if (P0 >= M.index - 1 && P0 <= M.index + M[0].length) { W = M[0].replace(/[./-]+$/, ''); break; }
++      }
++      W = (W || bestStr).toUpperCase();
++      try { if (searchInputRef.current) searchInputRef.current.value = W; } catch { /* */ }
++      pdfStore.switchTo(pdfFileName);
++      pdfStore.searchText(W);
++      try { mirrorToBoard(W); } catch { /* */ }
++      return;
++    }
+ 
+     contextMenuStore.showPdf(e.clientX, e.clientY, bestStr, pdfFileName);
+   }, [pdfFileName]);
+@@ -4025,16 +4072,7 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+ 
+         {/* Orientation / layout controls — kept directly right of page switching. */}
+         <div className="pdf-toolbar-group">
+-          <button
+-            data-testid="pdf-rotate"
+-            className={`pdf-toolbar-btn${rotation !== 0 ? ' active' : ''}`}
+-            onClick={() => { pdfStore.switchTo(pdfFileName); pdfStore.rotate(pdfFileName, 'cw'); }}
+-            title={rotation === 0
+-              ? 'Rotate page 90° clockwise (Q/E or ⌘←/→)'
+-              : `Rotated ${rotation}° — click to rotate further (Q/E or ⌘←/→)`}
+-          >
+-            <IconRotateClockwise size={14} />
+-          </button>
++          {/* 2R 27/10/2026: botão de girar o PDF removido (Roger: «não faz sentido») */}
+           <button
+             data-testid="pdf-mirror"
+             className={`pdf-toolbar-btn${mirror ? ' active' : ''}`}
+@@ -4062,154 +4100,18 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+           )}
+         </div>
+ 
+-        <div className="pdf-toolbar-separator" />
+-        <div className="pdf-search-wrapper">
+-          <div className="pdf-search-bar">
+-            <form className="pdf-search-form" onSubmit={handleSearch}>
+-              <input
+-                ref={searchInputRef}
+-                type="text"
+-                className="pdf-search-input"
+-                data-pdf-file={pdfFileName}
+-                placeholder={IS_2R ? (searchSyncOn() ? 'Buscar no PDF (e junto na placa)…' : 'Buscar no PDF (vários termos: 10UF 25V)') : 'Search (multi-term: 10UF 25V)'}
+-                title="Enter / ↓ / Cmd+F — next match. Shift+Enter / ↑ / Shift+Cmd+F — previous match."
+-                defaultValue={searchQuery}
+-                // On focus the whole list shows whatever the field holds (Preview's
+-                // magnifier menu); typing then filters it.
+-                onFocus={() => { setRecentFilter(''); setRecentHi(-1); setRecentsOpen(true); }}
+-                onBlur={() => { setRecentsOpen(false); setRecentHi(-1); }}
+-                onChange={(e) => {
+-                  setRecentFilter(e.target.value);
+-                  setRecentHi(-1);
+-                  setRecentsOpen(true);
+-                  if (!e.target.value.trim()) {
+-                    pdfStore.switchTo(pdfFileName);
+-                    pdfStore.searchText('');
+-                  }
+-                }}
+-                onKeyDown={(e) => {
+-                  if (recentsOpen && pdfRecents.length > 0) {
+-                    if (e.key === 'ArrowDown') { e.preventDefault(); setRecentHi(h => (h + 1) % pdfRecents.length); return; }
+-                    if (e.key === 'ArrowUp') { e.preventDefault(); setRecentHi(h => (h <= 0 ? pdfRecents.length - 1 : h - 1)); return; }
+-                    if (e.key === 'Escape') { e.preventDefault(); setRecentsOpen(false); setRecentHi(-1); return; }
+-                    if (e.key === 'Enter' && recentHi >= 0) { e.preventDefault(); pickRecent(pdfRecents[recentHi]); return; }
+-                  }
+-                  if (e.key === 'Enter') { setRecentsOpen(false); setRecentHi(-1); }
+-                  // PageUp/PageDown page the PDF even while the search field is
+-                  // focused — after a search the focus stays here, and losing
+-                  // keyboard paging mid-probe is worse than the caret quirk.
+-                  // (Home/End stay untouched: they move the text caret.)
+-                  if (e.key === 'PageDown' || e.key === 'PageUp') {
+-                    e.preventDefault();
+-                    pdfStore.switchTo(pdfFileName);
+-                    pdfStore.goToPage(currentPage + (e.key === 'PageDown' ? 1 : -1));
+-                    return;
+-                  }
+-                  if (matches.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+-                    e.preventDefault();
+-                    pdfStore.switchTo(pdfFileName);
+-                    if (e.key === 'ArrowDown') pdfStore.nextMatch();
+-                    else pdfStore.prevMatch();
+-                    return;
+-                  }
+-                  if (e.key === 'Enter') {
+-                    e.preventDefault();
+-                    const value = (e.target as HTMLInputElement).value;
+-                    pdfStore.switchTo(pdfFileName);
+-                    // Query unchanged + have matches → step next/prev (Shift = prev).
+-                    if (value && value === searchQuery && matches.length > 0) {
+-                      if (e.shiftKey) pdfStore.prevMatch();
+-                      else pdfStore.nextMatch();
+-                      return;
+-                    }
+-                    pdfStore.searchText(value);
+-                    mirrorToBoard(value);          // 2R: busca junto na placa
+-                    navHintShownRef.current = false;
+-                  }
+-                }}
+-              />
+-            </form>
+-            {matches.length > 0 ? (
+-              <>
+-                <button className="pdf-search-nav-btn" onClick={() => { pdfStore.switchTo(pdfFileName); pdfStore.prevMatch(); }} title="Previous match">&#9650;</button>
+-                <span className="pdf-search-counter">
+-                  {matchGroupCount > 0
+-                    ? `${activeGroupIndex + 1}/${matchGroupCount}`
+-                    : `${activeMatchIndex + 1}/${matches.length}`}
+-                </span>
+-                <button className="pdf-search-nav-btn" onClick={() => { pdfStore.switchTo(pdfFileName); pdfStore.nextMatch(); }} title="Next match">&#9660;</button>
+-              </>
+-            ) : searchQuery && !textExtracting ? (
+-              // Zero results: say so instead of showing nothing, and offer the
+-              // escape hatch — full-text search across all library PDFs.
+-              <>
+-                <span className="pdf-search-counter">0/0</span>
+-                <button
+-                  className="pdf-search-nav-btn pdf-search-library-btn"
+-                  title={`No matches here — search all library PDFs for "${searchQuery}"`}
+-                  onClick={() => {
+-                    databankStore.requestPdfSearch(searchQuery, 'all');
+-                    showSidebarTab('library');
+-                  }}
+-                >
+-                  Library&nbsp;⌕
+-                </button>
+-              </>
+-            ) : null}
+-          </div>
+-          {recentsOpen && pdfRecents.length > 0 && (
+-            <div className="pdf-search-recents" data-testid="pdf-search-recents" role="listbox" aria-label="Recent searches">
+-              {pdfRecents.map((text, i) => (
+-                <div
+-                  key={text}
+-                  className={`pdf-search-recent${i === recentHi ? ' hi' : ''}`}
+-                  role="option"
+-                  aria-selected={i === recentHi}
+-                  data-testid="pdf-search-recent"
+-                  // pointerdown, not click: the input's blur would close the
+-                  // list before a click could land.
+-                  onPointerDown={(e) => { e.preventDefault(); pickRecent(text); }}
+-                  onPointerEnter={() => setRecentHi(i)}
+-                >
+-                  <IconHistory size={12} stroke={2} />
+-                  <span>{text}</span>
+-                </div>
+-              ))}
+-            </div>
+-          )}
+-          {lookupHint && (
+-            <div className="pdf-lookup-hint">
+-              Double-click <b>{lookupHint}</b> to search
+-            </div>
+-          )}
+-          {showNavHint && !recentsOpen && (
+-            <div className="pdf-nav-hint">Enter / ↑↓ to navigate results</div>
+-          )}
+-          {isMultiTerm && (
+-            <div className="pdf-multiterm-dropdown">
+-              <div className="pdf-gap-row">
+-                <label>V</label>
+-                <input
+-                  type="range" min={0.5} max={20} step={0.5}
+-                  defaultValue={multiTermYGap}
+-                  onPointerUp={e => { pdfStore.switchTo(pdfFileName); pdfStore.setMultiTermYGap(Number((e.target as HTMLInputElement).value)); }}
+-                />
+-                <span>{multiTermYGap}x</span>
+-              </div>
+-              <div className="pdf-gap-row">
+-                <label>H</label>
+-                <input
+-                  type="range" min={0.5} max={20} step={0.5}
+-                  defaultValue={multiTermXGap}
+-                  onPointerUp={e => { pdfStore.switchTo(pdfFileName); pdfStore.setMultiTermXGap(Number((e.target as HTMLInputElement).value)); }}
+-                />
+-                <span>{multiTermXGap}x</span>
+-              </div>
+-              <span className="pdf-multiterm-hint">
+-                {matchGroupCount > 0 ? `${matchGroupCount} groups` : 'no matches'}
+-              </span>
+-            </div>
+-          )}
++        {/* 2R 23/10/2026 (Roger): botões de zoom no PDF — mesmo zoom da pinça, no centro da página */}
++        <div className="pdf-toolbar-group">
++          <button data-testid="pdf-zoom-out" className="pdf-toolbar-btn" title="Afastar (zoom −)"
++            onClick={() => { const el = containerRef.current; if (!el) return; pdfStore.switchTo(pdfFileName); const r = el.getBoundingClientRect();
++              el.dispatchEvent(new WheelEvent('wheel', { deltaY: 25, ctrlKey: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); }}>
++            <IconZoomOut size={14} />
++          </button>
++          <button data-testid="pdf-zoom-in" className="pdf-toolbar-btn" title="Aproximar (zoom +)"
++            onClick={() => { const el = containerRef.current; if (!el) return; pdfStore.switchTo(pdfFileName); const r = el.getBoundingClientRect();
++              el.dispatchEvent(new WheelEvent('wheel', { deltaY: -25, ctrlKey: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); }}>
++            <IconZoomIn size={14} />
++          </button>
+         </div>
+ 
+         <div className="pdf-toolbar-group">
+@@ -4273,6 +4175,156 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+       </div>
+       )}
+ 
++      {/* 2R 27/10/2026 (Roger: «o search do PDF está encavalado, manter o mesmo padrão e localização do BDV»): a busca
++          do PDF sai da barra e fica solta no canto de cima à esquerda do PDF, igual à da placa */}
++      <div className="pdf-search-wrapper r2pb">
++        <div className="pdf-search-bar">
++          <form className="pdf-search-form" onSubmit={handleSearch}>
++            <input
++              ref={searchInputRef}
++              type="text"
++              className="pdf-search-input"
++              data-pdf-file={pdfFileName}
++              placeholder={IS_2R ? (searchSyncOn() ? 'Buscar no PDF (e junto na placa)…' : 'Buscar no PDF (vários termos: 10UF 25V)') : 'Search (multi-term: 10UF 25V)'}
++              title="Enter / ↓ / Cmd+F — next match. Shift+Enter / ↑ / Shift+Cmd+F — previous match."
++              defaultValue={searchQuery}
++              // On focus the whole list shows whatever the field holds (Preview's
++              // magnifier menu); typing then filters it.
++              onFocus={() => { setRecentFilter(''); setRecentHi(-1); setRecentsOpen(true); }}
++              onBlur={() => { setRecentsOpen(false); setRecentHi(-1); }}
++              onChange={(e) => {
++                setRecentFilter(e.target.value);
++                setRecentHi(-1);
++                setRecentsOpen(true);
++                if (!e.target.value.trim()) {
++                  pdfStore.switchTo(pdfFileName);
++                  pdfStore.searchText('');
++                }
++              }}
++              onKeyDown={(e) => {
++                if (recentsOpen && pdfRecents.length > 0) {
++                  if (e.key === 'ArrowDown') { e.preventDefault(); setRecentHi(h => (h + 1) % pdfRecents.length); return; }
++                  if (e.key === 'ArrowUp') { e.preventDefault(); setRecentHi(h => (h <= 0 ? pdfRecents.length - 1 : h - 1)); return; }
++                  if (e.key === 'Escape') { e.preventDefault(); setRecentsOpen(false); setRecentHi(-1); return; }
++                  if (e.key === 'Enter' && recentHi >= 0) { e.preventDefault(); pickRecent(pdfRecents[recentHi]); return; }
++                }
++                if (e.key === 'Enter') { setRecentsOpen(false); setRecentHi(-1); }
++                // PageUp/PageDown page the PDF even while the search field is
++                // focused — after a search the focus stays here, and losing
++                // keyboard paging mid-probe is worse than the caret quirk.
++                // (Home/End stay untouched: they move the text caret.)
++                if (e.key === 'PageDown' || e.key === 'PageUp') {
++                  e.preventDefault();
++                  pdfStore.switchTo(pdfFileName);
++                  pdfStore.goToPage(currentPage + (e.key === 'PageDown' ? 1 : -1));
++                  return;
++                }
++                if (matches.length > 0 && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
++                  e.preventDefault();
++                  pdfStore.switchTo(pdfFileName);
++                  if (e.key === 'ArrowDown') pdfStore.nextMatch();
++                  else pdfStore.prevMatch();
++                  return;
++                }
++                if (e.key === 'Enter') {
++                  e.preventDefault();
++                  const value = (e.target as HTMLInputElement).value;
++                  pdfStore.switchTo(pdfFileName);
++                  // Query unchanged + have matches → step next/prev (Shift = prev).
++                  if (value && value === searchQuery && matches.length > 0) {
++                    if (e.shiftKey) pdfStore.prevMatch();
++                    else pdfStore.nextMatch();
++                    return;
++                  }
++                  pdfStore.searchText(value);
++                  mirrorToBoard(value);          // 2R: busca junto na placa
++                  navHintShownRef.current = false;
++                }
++              }}
++            />
++          </form>
++          {matches.length > 0 ? (
++            <>
++              <button className="pdf-search-nav-btn" onClick={() => { pdfStore.switchTo(pdfFileName); pdfStore.prevMatch(); }} title="Previous match">&#9650;</button>
++              <span className="pdf-search-counter">
++                {matchGroupCount > 0
++                  ? `${activeGroupIndex + 1}/${matchGroupCount}`
++                  : `${activeMatchIndex + 1}/${matches.length}`}
++              </span>
++              <button className="pdf-search-nav-btn" onClick={() => { pdfStore.switchTo(pdfFileName); pdfStore.nextMatch(); }} title="Next match">&#9660;</button>
++            </>
++          ) : searchQuery && !textExtracting ? (
++            // Zero results: say so instead of showing nothing, and offer the
++            // escape hatch — full-text search across all library PDFs.
++            <>
++              <span className="pdf-search-counter">0/0</span>
++              <button
++                className="pdf-search-nav-btn pdf-search-library-btn"
++                title={`No matches here — search all library PDFs for "${searchQuery}"`}
++                onClick={() => {
++                  databankStore.requestPdfSearch(searchQuery, 'all');
++                  showSidebarTab('library');
++                }}
++              >
++                Library&nbsp;⌕
++              </button>
++            </>
++          ) : null}
++        </div>
++        {recentsOpen && pdfRecents.length > 0 && (
++          <div className="pdf-search-recents" data-testid="pdf-search-recents" role="listbox" aria-label="Recent searches">
++            {pdfRecents.map((text, i) => (
++              <div
++                key={text}
++                className={`pdf-search-recent${i === recentHi ? ' hi' : ''}`}
++                role="option"
++                aria-selected={i === recentHi}
++                data-testid="pdf-search-recent"
++                // pointerdown, not click: the input's blur would close the
++                // list before a click could land.
++                onPointerDown={(e) => { e.preventDefault(); pickRecent(text); }}
++                onPointerEnter={() => setRecentHi(i)}
++              >
++                <IconHistory size={12} stroke={2} />
++                <span>{text}</span>
++              </div>
++            ))}
++          </div>
++        )}
++        {lookupHint && (
++          <div className="pdf-lookup-hint">
++            Double-click <b>{lookupHint}</b> to search
++          </div>
++        )}
++        {showNavHint && !recentsOpen && (
++          <div className="pdf-nav-hint">Enter / ↑↓ to navigate results</div>
++        )}
++        {isMultiTerm && (
++          <div className="pdf-multiterm-dropdown">
++            <div className="pdf-gap-row">
++              <label>V</label>
++              <input
++                type="range" min={0.5} max={20} step={0.5}
++                defaultValue={multiTermYGap}
++                onPointerUp={e => { pdfStore.switchTo(pdfFileName); pdfStore.setMultiTermYGap(Number((e.target as HTMLInputElement).value)); }}
++              />
++              <span>{multiTermYGap}x</span>
++            </div>
++            <div className="pdf-gap-row">
++              <label>H</label>
++              <input
++                type="range" min={0.5} max={20} step={0.5}
++                defaultValue={multiTermXGap}
++                onPointerUp={e => { pdfStore.switchTo(pdfFileName); pdfStore.setMultiTermXGap(Number((e.target as HTMLInputElement).value)); }}
++              />
++              <span>{multiTermXGap}x</span>
++            </div>
++            <span className="pdf-multiterm-hint">
++              {matchGroupCount > 0 ? `${matchGroupCount} groups` : 'no matches'}
++            </span>
++          </div>
++        )}
++      </div>
+       {textExtracting && (
+         <div className="pdf-text-extract-bar" title={`Indexing text: ${Math.round(textExtractProgress * 100)}%`}>
+           <div className="pdf-text-extract-fill" style={{ width: `${textExtractProgress * 100}%` }} />
+@@ -4312,7 +4364,7 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+       <div
+         className="pdf-canvas-container"
+         ref={containerRef}
+-        style={{ cursor: isDraggingRef.current ? 'grabbing' : 'crosshair', filter: nightFx?.css }}
++        style={{ cursor: isDraggingRef.current ? 'grabbing' : 'default', filter: nightFx?.css }}
+       >
+       {/* Every touch lands here, and only here. Without this layer the target
+           of a touch depended on what happened to be under the finger: page 1
+@@ -4371,7 +4423,19 @@ export function PdfViewerPanel(props: IDockviewPanelProps<{ pdfFileName?: string
+           wasDragRef.current = false;
+         }}
+         onDoubleClick={handleTextDblClick}
+-        onContextMenu={handleContextMenu}
++        onContextMenu={(ev: React.MouseEvent) => {
++          // 2R 24/10/2026: botão direito numa peça/net do PDF = mostra na placa (igual ao duplo clique); Shift abre o menu
++          if (!ev.shiftKey && r2w.__r2DireitoMenu !== true) {
++            const hit = hitTestWord(ev), board = boardStore.board;
++            if (hit && board) {
++              const up = hit.word.toUpperCase();
++              if (board.parts.some(p => p.name.toUpperCase() === up) || [...board.nets.keys()].some(n => n.toUpperCase() === up)) {
++                ev.preventDefault(); handleTextDblClick(ev); return;
++              }
++            }
++          }
++          handleContextMenu(ev);
++        }}
+       />
+         {glyphLoading && <div className="pdf-glyph-loading">Parsing fonts...</div>}
+         <div
+diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
+index 570d8640..93c72f4e 100644
+--- a/src/frontend/src/renderer/BoardRenderer.ts
++++ b/src/frontend/src/renderer/BoardRenderer.ts
+@@ -367,7 +367,7 @@ function trackpadSpeed(): { pan: number; zoom: number } {
+  *  'auto' = descobre pelo jeito do giro (roda de mouse dá saltos; trackpad desliza),
+  *  'mouse' = roda sempre amplia/reduz, 'trackpad' = dois dedos sempre arrastam. */
+ /* 2R 20/10/2026: 'flexbv' (padrão) — dois dedos para baixo aumenta e para cima diminui; roda do mouse para cima aumenta */
+-function pointerMode(): 'auto' | 'mouse' | 'trackpad' | 'flexbv' {
++export function pointerMode(): 'auto' | 'mouse' | 'trackpad' | 'flexbv' {
+   try {
+     const v = localStorage.getItem('2r-pointer-mode');
+     return v === 'mouse' || v === 'trackpad' || v === 'auto' ? v : 'flexbv';
+@@ -379,7 +379,7 @@ function invertFlag(k: '2r-mouse-invert' | '2r-pan-invert'): number {
+ }
+ /* 2R 27/10/2026 (Roger: «consegue aumentar a velocidade do scroll? ainda sinto que dá uma garrada»): roda do mouse 1,6×
+    por padrão (chave nova «2r-mouse-zoom2») e até 5× */
+-function mouseZoomSpeed(): number {
++export function mouseZoomSpeed(): number {
+   try { const n = parseFloat(localStorage.getItem('2r-mouse-zoom2') || '1.6'); return isFinite(n) && n > 0 ? n : 1.6; }
+   catch { return 1.6; }
+ }
+@@ -396,7 +396,7 @@ function r2RodaDoMouse(e: WheelEvent): boolean {
+ function r2RodaK(e: WheelEvent): number { return r2w.__r2RodaK ? r2w.__r2RodaK(e) : 1; }
+ 
+ /** 2R: trackpad direto (padrão ligado; Preferências › Uso › Trackpad). */
+-function trackpadDirect(): boolean {
++export function trackpadDirect(): boolean {
+   try {
+     if (!(window as unknown as { __2rAcervo?: unknown }).__2rAcervo) return false;
+     return localStorage.getItem('2r-trackpad-direto') !== '0';
+-- 
+2.43.0
+

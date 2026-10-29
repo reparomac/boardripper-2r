@@ -1,0 +1,347 @@
+From 2273d5921595ea85e93ff839e6308516f63fbc95 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:28:19 -0300
+Subject: [PATCH 06/22] 2R port p06-p07 guide/meter
+
+---
+ src/frontend/src/panels/MeterPanel.tsx |  15 +--
+ src/frontend/src/r2/guide-store.ts     | 150 +++++++++++++++++++++++--
+ src/frontend/src/r2/meter-store.ts     |   2 +-
+ src/frontend/src/r2/translate.ts       |   2 -
+ src/frontend/src/store/board-store.ts  |   3 +
+ 5 files changed, 148 insertions(+), 24 deletions(-)
+
+diff --git a/src/frontend/src/panels/MeterPanel.tsx b/src/frontend/src/panels/MeterPanel.tsx
+index c7389f3c..4d4c0f96 100644
+--- a/src/frontend/src/panels/MeterPanel.tsx
++++ b/src/frontend/src/panels/MeterPanel.tsx
+@@ -160,7 +160,8 @@ export function MeterPanel() {
+   const [editing, setEditing] = useState<number | null>(null);
+   const [sure, setSure] = useState(false);
+   const api = meterApi();
+-  const [kind, setKind] = useState<'rigol' | 'i2c'>(() => { try { return (localStorage.getItem('2r-meter-kind') as 'rigol' | 'i2c') || 'rigol'; } catch { return 'rigol'; } });
++  // 2R 23/10/2026: i2C C09 removido daqui (tem painel próprio no SDS) — só Rigol
++  const [kind, setKind] = useState<'rigol' | 'i2c'>('rigol');
+   const [host, setHost] = useState('');
+   const [ports, setPorts] = useState<{ port: string; desc: string }[]>([]);
+   const [port, setPort] = useState('');
+@@ -179,15 +180,10 @@ export function MeterPanel() {
+     setMsg('');
+     api.connect(kind === 'rigol' ? { kind, host, port: '5555' } : { kind, port, baud });
+   };
+-  const learn = async () => {
+-    setMsg('Gravando 10 s do que o C09 manda… mexa nas pontas.');
+-    const r = await api.learn({ port, baud });
+-    setMsg(r.ok ? 'Pronto: arquivo C09_captura.txt na Mesa. Mande para o suporte.' : 'Não consegui gravar: ' + (r.error || ''));
+-  };
+   const csv = () => {
+     const head = 'data;quem mediu;placa;componente;pino;net;modo;medido;unidade;esperado;resultado;aparelho;medido_em;editado\n';
+     const rows = meterStore.shown.map(m => [new Date(m.t).toLocaleString('pt-BR'), m.by || '', m.board, m.part, m.pin, m.net, MODE_LABEL[m.mode],
+-      m.value.toFixed(4).replace('.', ','), m.unit, m.expected, m.status, m.source, m.via || '',
++      (m.value == null ? 'OL' : Number(m.value).toFixed(4)).replace('.', ','), m.unit, m.expected, m.status, m.source, m.via || '',
+       m.edited ? 'sim (era ' + (m.orig ?? 0).toFixed(4).replace('.', ',') + ')' : ''].join(';')).join('\n');
+     const a = document.createElement('a');
+     a.href = URL.createObjectURL(new Blob([head + rows], { type: 'text/csv' }));
+@@ -199,7 +195,6 @@ export function MeterPanel() {
+       <div className="r2acv-section r2meter-conn">
+         <div className="r2meter-kinds">
+           <button className={`r2meter-kind ${kind === 'rigol' ? 'sel' : ''}`} onClick={() => setKind('rigol')} disabled={on}>Rigol DM858E (rede)</button>
+-          <button className={`r2meter-kind ${kind === 'i2c' ? 'sel' : ''}`} onClick={() => setKind('i2c')} disabled={on}>i2C C09 (USB)</button>
+         </div>
+         {kind === 'rigol' ? (
+           <label className="r2meter-field">IP do Rigol (Utility › I/O › LAN)
+@@ -224,8 +219,6 @@ export function MeterPanel() {
+           {!on
+             ? <button className="r2acv-send r2meter-btn" onClick={connect} disabled={kind === 'rigol' ? !host.trim() : !port}><IconPlugConnected size={14} /> Ligar</button>
+             : <button className="r2meter-btn r2meter-off" onClick={() => api.disconnect()}><IconPlugConnectedX size={14} /> Desligar</button>}
+-          {kind === 'i2c' && !on && <button className="r2meter-btn r2meter-off" onClick={learn} disabled={!port}>Aprender (10 s)</button>}
+-          {kind === 'i2c' && !on && <button className="r2meter-btn r2meter-off" onClick={() => api.ports().then(r => setPorts(r.ports))}>Procurar portas</button>}
+         </div>
+         <div className={`r2acv-note ${st.state === 'error' ? 'r2acv-msg err' : ''}`}>{st.text}</div>
+         {msg && <div className="r2acv-note">{msg}</div>}
+@@ -277,7 +270,7 @@ export function MeterPanel() {
+                   <span className="r2hist-sub">{fmtWhen(m.t)}{m.by ? ' · ' + m.by : ''}</span>
+                 </td>
+                 <td>{editing === m.t ? <EditValue t={m.t} value={m.value} onDone={() => setEditing(null)} />
+-                  : <>{m.value.toFixed(3)}{m.edited && <span className="r2hist-ed" title="Corrigido à mão">*</span>}</>}</td>
++                  : <>{m.value == null ? 'OL' : Number(m.value).toFixed(3)}{m.edited && <span className="r2hist-ed" title="Corrigido à mão">*</span>}</>}</td>
+                 <td>{m.expected || '—'}</td>
+                 <td>{m.status === 'ok' ? '✓' : m.status === 'fora' ? '✕' : ''}</td>
+                 <td className="r2hist-act">
+diff --git a/src/frontend/src/r2/guide-store.ts b/src/frontend/src/r2/guide-store.ts
+index 425e0959..1fd3fa5d 100644
+--- a/src/frontend/src/r2/guide-store.ts
++++ b/src/frontend/src/r2/guide-store.ts
+@@ -23,7 +23,11 @@ export interface Step { n: number; nets: string[]; note: string; raw: string; /*
+   v?: string; d?: string; r?: string; /** quem/quando preencheu pelo instrumento */ valBy?: string; valAt?: number;
+   /** Ponto a ponto (Roger, 11/10/2026): nome do teste (renomeável), valor certo (ideal) e a estrela
+    *  do «valor certo depois do reparo» (vira referência). */
+-  name?: string; iv?: string; id?: string; ir?: string; star?: boolean }
++  name?: string; iv?: string; id?: string; ir?: string; star?: boolean;
++  /** 2R 16/10/2026: 1 linha por passo — sub-passos de um grupo (id do grupo, posição k de m, nº do passo original) */
++  gid?: string | number; gk?: number; gm?: number; gn?: number;
++  /** 2R 26/10/2026: tipo da medida do valor esperado (v | d | r) */
++  tipo?: 'v' | 'd' | 'r' }
+ export interface Roteiro { id: string; title: string; board: string; steps: Step[]; created: number; by?: string; models?: string[]; builtin?: boolean;
+   /** créditos: quem montou a sequência (Roger: «colocar os créditos para o dono da sequência de start») */
+   credit?: string; upd?: number;
+@@ -185,7 +189,8 @@ export function resolve(board: BoardData, step: Step): Resolved {
+ }
+ 
+ function current(): Resolved | null {
+-  const b = boardStore.activeTab?.board;
++  // 2R: com o ponto a ponto ligado, vale a placa aberta mesmo que a aba ativa seja outra (PDF)
++  const b = boardStore.activeTab?.board || (active && on ? (boardStore.tabs.find(t => t.board) || { board: null }).board : null);
+   if (!active || !b || !active.steps[pos]) return null;
+   return resolve(b, active.steps[pos]);
+ }
+@@ -198,6 +203,81 @@ function savedZoom(): number | undefined {
+   try { const v = parseFloat(localStorage.getItem('2r-seq-zoom') || ''); return v > 0 ? v : undefined; } catch { return undefined; }
+ }
+ 
++type R2W = Window & {
++  __2rRend?: { containerEl?: HTMLElement };
++  __r2rc?: ReturnType<typeof setTimeout>;
++  __r2PertoOff?: boolean;
++  __r2pp?: { x: number; y: number; side?: string } | null;
++  __r2rp?: { on: boolean };
++  __r2GrpMudou?: (a: Roteiro, p: number) => void;
++  __r2Anot?: (a: Roteiro, i: number, patch: Partial<Step>) => void;
++  __r2Num?: (k: string, v: string) => string | null;
++  __r2PlacaExtra?: string;
++  __2rVP?: { scale: { x: number } };
++  __2rBoardGet?: () => typeof boardStore;
++  __r2LadoPeca?: (w: string) => void;
++  __r2seq?: unknown;
++};
++const r2w = window as R2W;
++
++/* 2R 21/10/2026 (Roger): a cada passo, mesmo zoom do usuário e o pad no centro — se a área da placa mudar de
++   tamanho logo depois (coluna/esquemático abrindo), centraliza de novo */
++function r2Recentra(t: Point) {
++  const R = r2w.__2rRend;
++  if (!R || !R.containerEl) return;
++  const w0 = R.containerEl.clientWidth, h0 = R.containerEl.clientHeight;
++  clearTimeout(r2w.__r2rc);
++  r2w.__r2rc = setTimeout(() => {
++    const R2 = r2w.__2rRend;
++    if (!R2 || !R2.containerEl || !on) return;
++    if (R2.containerEl.clientWidth !== w0 || R2.containerEl.clientHeight !== h0) {
++      const s = boardStore.activeTab?.selection;
++      if (s && s.partIndex === t.partIndex && s.pinIndex === t.pinIndex) boardStore.focusPinKeepZoom(t.partIndex, t.pinIndex);
++    }
++  }, 650);
++}
++/* 2R 26/10/2026 (Roger): «durante os estudos, quando mudar de ponto, ir para o ponto mais próximo em relação ao ponto
++   anterior» — entre os pontos medíveis da net, vai para o mais perto do ponto do passo anterior; ponto fixado à mão vale */
++function r2PtAtual(): { x: number; y: number; side?: string } | null {
++  try {
++    const c = current(), b = boardStore.activeTab?.board;
++    const t = c && c.points[pointIdx % Math.max(1, c.points.length)];
++    const p = t && b && b.parts[t.partIndex]?.pins[t.pinIndex];
++    return p && b ? { x: p.position.x, y: p.position.y, side: b.parts[t!.partIndex].side } : null;
++  } catch { return null; }
++}
++function r2Perto(p: { x: number; y: number; side?: string } | null | undefined): number {
++  try {
++    if (!p || r2w.__r2PertoOff) return 0;
++    const c = current(), b = boardStore.activeTab?.board;
++    if (!c || !b || !c.points.length || c.points[0].fixed) return 0;
++    let a = c.points.map((t, k) => ({ t, k })).filter(o => o.t.kind !== 'outro');
++    if (!a.length) a = c.points.map((t, k) => ({ t, k }));
++    let m = 0, d = Infinity;
++    for (const o of a) {
++      const pt = b.parts[o.t.partIndex], q = pt?.pins[o.t.pinIndex];
++      if (!q) continue;
++      const e = (q.position.x - p.x) ** 2 + (q.position.y - p.y) ** 2 + (p.side != null && pt.side != null && pt.side !== p.side ? 1e-9 : 0);
++      if (e < d) { d = e; m = o.k; }
++    }
++    return m;
++  } catch { return 0; }
++}
++/* 2R 26/10/2026 (Roger: «quando fizer uma busca no PDF, clicar duas vezes, mostrar já o componente exato no BDV, se
++   possível inverter o lado bottom e top»): peça no lado escondido → vira a placa para o lado dela; com os dois lados ou
++   borboleta, não mexe */
++export function r2LadoPeca(w: string): void {
++  try {
++    const t = boardStore.activeTab, b = t?.board;
++    if (!t || !b || t.butterfly) return;
++    const W = String(w).toUpperCase(), P = b.parts.find(p => p.name.toUpperCase() === W);
++    if (!P || (P.side !== 'top' && P.side !== 'bottom')) return;
++    const vis = P.side === 'top' ? t.showTop : t.showBottom;
++    if (!vis) boardStore.r2Patch({ showTop: P.side === 'top', showBottom: P.side === 'bottom', butterfly: false });
++  } catch { /* */ }
++}
++r2w.__r2LadoPeca = (w: string) => r2LadoPeca(w);
++
+ /** Mostra o passo na placa: acende a net e leva a câmera ao ponto indicado. */
+ function show() {
+   const r = current();
+@@ -207,7 +287,21 @@ function show() {
+   if (pt && tab?.board) {
+     const z = applySavedZoom ? savedZoom() : undefined;
+     applySavedZoom = false;
++    // 2R 27/10/2026 (Roger: «nos estudos, tem ponto que fica do outro lado da placa, tem que virar automaticamente…
++    // sempre deixar o ponto no centro da cruz»)
++    const vt = (() => {
++      try {
++        const P = tab.board!.parts[pt.partIndex];
++        if (!P || tab.butterfly || (P.side !== 'top' && P.side !== 'bottom')) return false;
++        const vis = P.side === 'top' ? tab.showTop : tab.showBottom;
++        if (vis) return false;
++        r2LadoPeca(P.name);
++        return true;
++      } catch { return false; }
++    })();
+     boardStore.focusPinKeepZoom(pt.partIndex, pt.pinIndex, z);
++    r2Recentra(pt);
++    if (vt) [90, 300].forEach(ms => setTimeout(() => { try { boardStore.focusPinKeepZoom(pt.partIndex, pt.pinIndex); } catch { /* */ } }, ms));
+   } else if (r.nets[0]) {
+     boardStore.highlightNet(r.nets[0]);
+   }
+@@ -234,6 +328,7 @@ function followSchematic(r: Resolved) {
+   }, 180);
+ }
+ 
++r2w.__2rBoardGet = () => boardStore;
+ export const guideStore = {
+   subscribe(f: () => void) { subs.add(f); return () => { subs.delete(f); }; },
+   get rev() { return rev; },
+@@ -260,10 +355,42 @@ export const guideStore = {
+   },
+   open(id: string) { active = list.find(x => x.id === id) ?? null; pos = 0; pointIdx = 0; emit(); },
+   start() { if (!active) return; on = true; applySavedZoom = true; try { localStorage.setItem(ON_KEY, '1'); } catch { /* */ } show(); },
+-  stop() { on = false; try { localStorage.setItem(ON_KEY, '0'); } catch { /* */ } emit(); },
+-  go(i: number) { if (!active) return; pos = Math.max(0, Math.min(active.steps.length - 1, i)); pointIdx = 0; show(); },
+-  next() { guideStore.go(pos + 1); },
+-  prev() { guideStore.go(pos - 1); },
++  stop() {
++    try { const v = r2w.__2rVP, z = v && Math.abs(v.scale.x); if (z && z > 0) localStorage.setItem('2r-seq-zoom', String(z)); } catch { /* */ }
++    on = false;
++    r2w.__r2rp = { on: false };
++    try { localStorage.setItem(ON_KEY, '0'); } catch { /* */ } emit();
++  },
++  go(i: number) {
++    if (!active) return;
++    r2w.__r2pp = r2PtAtual();
++    pos = Math.max(0, Math.min(active.steps.length - 1, i));
++    pointIdx = r2Perto(r2w.__r2pp);
++    if (r2w.__r2GrpMudou) r2w.__r2GrpMudou(active, pos);
++    show();
++  },
++  next() { guideStore.go(r2w.__r2rp && r2w.__r2rp.on ? guideStore.nextMeasured(1) : pos + 1); },
++  prev() { guideStore.go(r2w.__r2rp && r2w.__r2rp.on ? guideStore.nextMeasured(-1) : pos - 1); },
++  /* 2R 16/10/2026: REPLAY — rever só os passos já medidos (somente leitura) */
++  nextMeasured(d: number): number {
++    if (!active) return pos;
++    for (let e = pos + d; e >= 0 && e < active.steps.length; e += d) {
++      const t = active.steps[e];
++      if (t.v || t.d || t.r) return e;
++    }
++    return pos;
++  },
++  replay(v: boolean): boolean {
++    r2w.__r2rp = { on: !!v };
++    if (v && active) {
++      const e = active.steps.findIndex(t => t.v || t.d || t.r);
++      if (e < 0) { r2w.__r2rp = { on: false }; emit(); return false; }
++      if (!on) guideStore.start();
++      guideStore.go(e);
++    } else emit();
++    return true;
++  },
++  get replaying() { return !!(r2w.__r2rp && r2w.__r2rp.on); },
+   /** Outro ponto da mesma net (Tab). */
+   nextPoint(d = 1) { const r = current(); if (!r?.points.length) return; pointIdx = (pointIdx + d + r.points.length) % r.points.length; show(); },
+   usePoint(i: number) { pointIdx = i; show(); },
+@@ -274,6 +401,7 @@ export const guideStore = {
+     if (!active || !active.steps[i]) return;
+     const steps = active.steps.map((st, k) => (k === i ? { ...st, ...patch } : st));
+     replaceActive(steps);
++    if (r2w.__r2Anot) r2w.__r2Anot(active, i, patch);
+     const onlyValues = Object.keys(patch).every(k => ['v', 'd', 'r', 'valBy', 'valAt', 'note'].includes(k));
+     if (i === pos && !onlyValues) { pointIdx = 0; if (on) show(); }
+   },
+@@ -339,11 +467,12 @@ export const guideStore = {
+   },
+   /** Leitura do instrumento com a sequência ligada: preenche a coluna do modo no passo atual. */
+   recordValue(mode: 'tensao' | 'diodo' | 'resistencia', value: number, unit: string, by = ''): boolean {
+-    if (!on || !active || !active.steps[pos]) return false;
+-    const txt = mode === 'resistencia' ? fmtOhm(value) : value.toFixed(3);
++    if (!on || !active || !active.steps[pos] || (r2w.__r2rp && r2w.__r2rp.on)) return false;
+     const key = mode === 'tensao' ? 'v' : mode === 'diodo' ? 'd' : 'r';
++    // 2R 26/10/2026: valores no padrão do SDS (vírgula, V com 2 casas) — window.__r2Num vem do index.html
++    const txt = r2w.__r2Num ? r2w.__r2Num(key, String(value)) : mode === 'resistencia' ? fmtOhm(value) : value.toFixed(3);
+     void unit;
+-    guideStore.editStep(pos, { [key]: txt, valBy: by, valAt: Date.now() } as Partial<Step>);
++    guideStore.editStep(pos, { [key]: txt as string, valBy: by, valAt: Date.now() } as Partial<Step>);
+     return true;
+   },
+   // ── programar os pontos a medir (Roger, 11/10/2026): clicar/buscar na placa e no PDF,
+@@ -439,6 +568,7 @@ export const guideStore = {
+     replaceActive(b.steps.map(s => ({ ...s })));
+   },
+ };
++r2w.__r2seq = guideStore; // 2R: o index.html (painéis do ponto a ponto, tecla N) usa window.__r2seq
+ 
+ // ── junto do boardview (core/medicoes.py: <arquivo>.2r/sequencias.json) ──
+ interface SeqApi { seqList?(b: string): Promise<{ rows: Roteiro[]; where?: string }>; seqSave?(b: string, r: unknown): Promise<{ ok: boolean }> }
+@@ -472,7 +602,7 @@ async function pullSeq() {
+ 
+ /** O roteiro é desta placa? (820-xxxxx no nome do arquivo, sem a revisão, ou o A-number). */
+ export function matchesBoard(r: Roteiro, fileName: string): boolean {
+-  const f = (fileName || '').toUpperCase();
++  const f = ((fileName || '') + ' ' + ((window as unknown as { __r2PlacaExtra?: string }).__r2PlacaExtra || '')).toUpperCase();
+   const num = /^(820-\d{4,5})/.exec(r.board || '')?.[1];
+   return (!!num && f.includes(num)) || (r.models ?? []).some(m => f.includes(m));
+ }
+diff --git a/src/frontend/src/r2/meter-store.ts b/src/frontend/src/r2/meter-store.ts
+index dd6563c1..d3f00f9d 100644
+--- a/src/frontend/src/r2/meter-store.ts
++++ b/src/frontend/src/r2/meter-store.ts
+@@ -246,7 +246,7 @@ function judge(m: Medicao): Medicao {
+ 
+ function sourceName(): string {
+   if (status.idn) return status.idn;
+-  return status.kind === 'i2c' ? 'i2C C09' : status.kind === 'rigol' ? 'Rigol DM858E' : 'multímetro';
++  return status.kind === 'rigol' ? 'Rigol DM858E' : 'multímetro';
+ }
+ 
+ /** Pino selecionado e o valor esperado dele para a leitura (sem gravar). */
+diff --git a/src/frontend/src/r2/translate.ts b/src/frontend/src/r2/translate.ts
+index 8ecdfc75..7a21039a 100644
+--- a/src/frontend/src/r2/translate.ts
++++ b/src/frontend/src/r2/translate.ts
+@@ -80,7 +80,6 @@ const ES: Record<string, string> = {
+ // Textos da 2R (escritos em português no código) → espanhol / inglês
+ const MINE_ES: Record<string, string> = {
+   "Curvas": "Curvas", "Start": "Arranque", "Sequência de start": "Secuencia de arranque", "Ligar sequência": "Activar secuencia", "Curvas (RastreCurve / Smart Curve)…": "Curvas (RastreCurve / Smart Curve)…", "Sequência de start na placa…": "Secuencia de arranque en la placa…", "Converter": "Convertir", "Roteiros desta placa": "Guiones de esta placa", "Novo roteiro": "Nuevo guion", "trocar roteiro": "cambiar guion", "Capturar curva": "Capturar curva", "Foto da tela": "Foto de la pantalla", "Curva firme — pode capturar": "Curva estable — puede capturar", "Esperando a curva firmar (capacitores carregando)…": "Esperando que la curva se estabilice (capacitores cargando)…", "Capturar sozinho quando a curva firmar": "Capturar solo cuando la curva se estabilice", "Igual à oficial": "Igual a la oficial", "Parecida": "Parecida", "Diferente da oficial": "Diferente de la oficial", "Aprovar": "Aprobar", "Recusar": "Rechazar", "Perfil": "Perfil", "Ponta preta (referência)": "Punta negra (referencia)", "Bateria e carregador desligados": "Batería y cargador desconectados", "Placa descansada (capacitores descarregados)": "Placa en reposo (capacitores descargados)",
+-  "Medições": "Mediciones", "Multímetro e medições (Rigol / i2C)…": "Multímetro y mediciones (Rigol / i2C)…", "Mapear componente (sequência dos pinos)…": "Mapear componente (secuencia de los pines)…",
+   "Apagar as desta placa?": "¿Borrar las de esta placa?", "Salvo na pasta da loja: todos os computadores veem estas medições.": "Guardado en la carpeta del taller: todas las computadoras ven estas mediciones.", "Salvo só neste computador (a pasta da loja não está ligada).": "Guardado solo en esta computadora (la carpeta del taller no está activa).",
+   "Captura automática": "Captura automática", "Captura manual": "Captura manual", "Grava quando a leitura fica parada por": "Graba cuando la lectura queda quieta por", "Tecla para gravar:": "Tecla para grabar:", "Aperte a tecla…": "Presione la tecla…", "Gravar agora": "Grabar ahora", "Som da leitura (quando a leitura firma)": "Sonido de la lectura (cuando la lectura se estabiliza)", "♪ dentro da margem": "♪ dentro del margen", "♪ um pouco fora": "♪ un poco fuera", "♪ muito fora": "♪ muy fuera", "Som da gravação": "Sonido de la grabación", "♪ gravou": "♪ grabó", "♪ não gravou": "♪ no grabó", "Medições gravadas em nome de": "Mediciones grabadas a nombre de", "Apagar tudo?": "¿Borrar todo?", "Corrigir o valor": "Corregir el valor", "Apagar esta medição": "Borrar esta medición", "Sem leitura agora (ponta aberta).": "Sin lectura ahora (punta abierta).", "Clique e aperte a tecla que você quer usar": "Haga clic y presione la tecla que quiere usar", "Ouvir": "Escuchar",
+   "Mapear componente": "Mapear componente", "Clique num componente na placa para ver a sequência dos pinos e o ponto de medição mais próximo.": "Haga clic en un componente de la placa para ver la secuencia de los pines y el punto de medición más cercano.", "Mapear": "Mapear", "medidos": "medidos", "Sequência dos pinos": "Secuencia de los pines", "Pino 1, anti-horário (padrão)": "Pin 1, antihorario (estándar)", "Pino 1, horário": "Pin 1, horario", "Ímpares primeiro, depois pares (FPC)": "Impares primero, después pares (FPC)", "Pares primeiro, depois ímpares (FPC)": "Pares primero, después impares (FPC)", "Ordem dos números (1, 2, 3…)": "Orden de los números (1, 2, 3…)", "Ir sozinho para o próximo pino depois de medir": "Pasar solo al siguiente pin después de medir", "Pular pinos de GND": "Saltar pines de GND", "◀ Anterior": "◀ Anterior", "Próximo ▶": "Siguiente ▶", "Sem acesso ao pad de": "¿Sin acceso al pad de", "? Meça a mesma net (": "? Mida la misma net (", ") em:": ") en:", "Nenhum ponto de teste ou passivo nessa net.": "Ningún punto de prueba o pasivo en esa net.", "Mostrar na placa": "Mostrar en la placa", "Medir aqui": "Medir aquí", "Medindo aqui ✓": "Midiendo aquí ✓", "ponto de teste": "punto de prueba", "passivo": "pasivo", "· outro lado": "· otro lado", "Mapear componente (sequência dos pinos)…": "Mapear componente (secuencia de los pines)…", "Próximo pino da sequência": "Siguiente pin de la secuencia", "Pino anterior da sequência": "Pin anterior de la secuencia", "· em": "· en",
+@@ -143,7 +142,6 @@ const MINE_ES: Record<string, string> = {
+ 
+ const MINE_EN: Record<string, string> = {
+   "Curvas": "Curves", "Start": "Power-on", "Sequência de start": "Power-on sequence", "Ligar sequência": "Start sequence", "Curvas (RastreCurve / Smart Curve)…": "Curves (RastreCurve / Smart Curve)…", "Sequência de start na placa…": "Power-on sequence on the board…", "Converter": "Convert", "Roteiros desta placa": "Scripts for this board", "Novo roteiro": "New script", "trocar roteiro": "change script", "Capturar curva": "Capture curve", "Foto da tela": "Screen photo", "Curva firme — pode capturar": "Curve settled — ready to capture", "Esperando a curva firmar (capacitores carregando)…": "Waiting for the curve to settle (capacitors charging)…", "Capturar sozinho quando a curva firmar": "Capture automatically when the curve settles", "Igual à oficial": "Same as official", "Parecida": "Similar", "Diferente da oficial": "Different from official", "Aprovar": "Approve", "Recusar": "Reject", "Perfil": "Profile", "Ponta preta (referência)": "Black probe (reference)", "Bateria e carregador desligados": "Battery and charger disconnected", "Placa descansada (capacitores descarregados)": "Board rested (capacitors discharged)",
+-  "Medições": "Measurements", "Multímetro e medições (Rigol / i2C)…": "Multimeter and measurements (Rigol / i2C)…", "Mapear componente (sequência dos pinos)…": "Map component (pin sequence)…",
+   "Apagar as desta placa?": "Delete this board's?", "Salvo na pasta da loja: todos os computadores veem estas medições.": "Saved in the shop folder: every computer sees these measurements.", "Salvo só neste computador (a pasta da loja não está ligada).": "Saved on this computer only (the shop folder is not set up).",
+   "Captura automática": "Automatic capture", "Captura manual": "Manual capture", "Grava quando a leitura fica parada por": "Saves when the reading holds still for", "Tecla para gravar:": "Key to save:", "Aperte a tecla…": "Press the key…", "Gravar agora": "Save now", "Som da leitura (quando a leitura firma)": "Reading sound (when the reading settles)", "♪ dentro da margem": "♪ within margin", "♪ um pouco fora": "♪ slightly off", "♪ muito fora": "♪ far off", "Som da gravação": "Save sound", "♪ gravou": "♪ saved", "♪ não gravou": "♪ not saved", "Medições gravadas em nome de": "Measurements saved as", "Apagar tudo?": "Delete all?", "Corrigir o valor": "Correct the value", "Apagar esta medição": "Delete this measurement", "Sem leitura agora (ponta aberta).": "No reading now (probe open).", "Clique e aperte a tecla que você quer usar": "Click and press the key you want to use", "Ouvir": "Listen",
+   "Mapear componente": "Map component", "Clique num componente na placa para ver a sequência dos pinos e o ponto de medição mais próximo.": "Click a part on the board to see its pin sequence and the nearest measuring point.", "Mapear": "Map", "medidos": "measured", "Sequência dos pinos": "Pin sequence", "Pino 1, anti-horário (padrão)": "Pin 1, counter-clockwise (default)", "Pino 1, horário": "Pin 1, clockwise", "Ímpares primeiro, depois pares (FPC)": "Odd first, then even (FPC)", "Pares primeiro, depois ímpares (FPC)": "Even first, then odd (FPC)", "Ordem dos números (1, 2, 3…)": "Number order (1, 2, 3…)", "Ir sozinho para o próximo pino depois de medir": "Go to the next pin after measuring", "Pular pinos de GND": "Skip GND pins", "◀ Anterior": "◀ Previous", "Próximo ▶": "Next ▶", "Sem acesso ao pad de": "No access to the pad of", "? Meça a mesma net (": "? Measure the same net (", ") em:": ") at:", "Nenhum ponto de teste ou passivo nessa net.": "No test point or passive on this net.", "Mostrar na placa": "Show on the board", "Medir aqui": "Measure here", "Medindo aqui ✓": "Measuring here ✓", "ponto de teste": "test point", "passivo": "passive", "· outro lado": "· other side", "Mapear componente (sequência dos pinos)…": "Map component (pin sequence)…", "Próximo pino da sequência": "Next pin in sequence", "Pino anterior da sequência": "Previous pin in sequence", "· em": "· at",
+diff --git a/src/frontend/src/store/board-store.ts b/src/frontend/src/store/board-store.ts
+index 749f734b..6288ee46 100644
+--- a/src/frontend/src/store/board-store.ts
++++ b/src/frontend/src/store/board-store.ts
+@@ -993,6 +993,9 @@ class BoardStore extends Emitter {
+     this.notify();
+   }
+ 
++  /** 2R: muda a aba ativa de fora (lado da placa no ponto a ponto / duplo clique no PDF) e avisa. */
++  r2Patch(patch: Partial<BoardTab>) { this.updateActiveTab(patch); this.notify(); }
++
+   private updateActiveTab(patch: Partial<BoardTab>) {
+     const tab = this.activeTab;
+     if (!tab) return;
+-- 
+2.43.0
+

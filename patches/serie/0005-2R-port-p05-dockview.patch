@@ -1,0 +1,159 @@
+From a8525153d666884f44e8c154c812b65438b4703a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:26:13 -0300
+Subject: [PATCH 05/22] 2R port p05 dockview
+
+---
+ src/frontend/src/store/dockview-api.ts | 97 +++++++++++++++++++++++++-
+ 1 file changed, 96 insertions(+), 1 deletion(-)
+
+diff --git a/src/frontend/src/store/dockview-api.ts b/src/frontend/src/store/dockview-api.ts
+index e3b57472..a14afe66 100644
+--- a/src/frontend/src/store/dockview-api.ts
++++ b/src/frontend/src/store/dockview-api.ts
+@@ -2,6 +2,7 @@ import type { DockviewApi, IDockviewPanel, DockviewGroupPanel } from 'dockview-r
+ import { log } from './log-store';
+ import { isTwoWindowMode, setTwoWindowMode, onTwoWindowModeChange } from './two-window-mode';
+ import { boardStore } from './board-store';
++import { viewCommands } from './view-commands';
+ 
+ let _api: DockviewApi | null = null;
+ /** Re-entrancy guard: suppresses the mode-change side effect during the
+@@ -48,8 +49,40 @@ export function onAutoSwitchChange(fn: () => void): () => void {
+   return () => { _autoSwitchListeners.delete(fn); };
+ }
+ 
++/* 2R 27/10/2026 07h26 (Roger: «no meu Mac não abriu desse modo»): placa e PDF lado a lado pela 1ª vez → placa 3/4, PDF 1/4
++   (vale vindo do Acervo 2R, da sessão ou com a placa aberta depois do PDF). window.__r2PdfTerco=false desliga. */
++let _r2PdfLadoK = '';
++function r2PdfLado(e: DockviewApi): void {
++  try {
++    if ((window as unknown as { __r2PdfTerco?: boolean }).__r2PdfTerco === false || !e) return;
++    const b = e.panels.find(a => a.id.startsWith('board-'));
++    const p = e.panels.find(a => a.id.startsWith('pdf-'));
++    if (!b || !p || !b.group || !p.group || b.group === p.group) return;
++    try { if (p.group.api.location.type !== 'grid' || b.group.api.location.type !== 'grid') return; } catch { /* */ }
++    const k = b.group.id + '|' + p.group.id;
++    if (_r2PdfLadoK === k) return;
++    _r2PdfLadoK = k;
++    // 07h32: aplica na hora, sem esperar o desenho do PDF, usando a largura total da área
++    const aj = () => {
++      try {
++        const A = b.group.element.getBoundingClientRect(), B = p.group.element.getBoundingClientRect();
++        const W = A.width || B.width ? Math.abs(B.left - A.left) >= Math.abs(B.top - A.top) : e.width >= e.height;
++        if (W) b.group.api.setSize({ width: Math.round((e.width * 3) / 4) });
++        else b.group.api.setSize({ height: Math.round((e.height * 3) / 4) });
++      } catch { /* */ }
++    };
++    aj();
++    try { requestAnimationFrame(aj); } catch { /* */ }
++    [30, 120, 400, 1200].forEach(t => setTimeout(aj, t));
++  } catch { /* */ }
++}
++
+ export function setDockviewApi(api: DockviewApi) {
+   _api = api;
++  try { api.onDidAddPanel(() => r2PdfLado(api)); } catch { /* */ }
++  // 07h38 (Roger: «não abre o PDF em 1/4»): o layout salvo «Placa | PDF» move o PDF para um grupo novo logo depois de abrir
++  try { api.onDidMovePanel(() => r2PdfLado(api)); } catch { /* */ }
++  try { api.onDidAddGroup(() => setTimeout(() => r2PdfLado(api), 0)); } catch { /* */ }
+   if (_modeUnsubscribe) { _modeUnsubscribe(); _modeUnsubscribe = null; }
+   _modeUnsubscribe = onTwoWindowModeChange(() => {
+     if (_modeListenerSuppressed) return;
+@@ -409,6 +442,21 @@ export function ensurePdfPanel(fileName: string): void {
+               };
+             })(),
+       });
++      // 2R 27/10/2026 (Roger: «quando abrir o BDV e o PDF, deixar o espaço do PDF menor, um terço em relação ao tamanho do BDV»)
++      if (!existingPdf && (window as unknown as { __r2PdfTerco?: boolean }).__r2PdfTerco !== false) {
++        const r = api.panels.find(a => a.id.startsWith('board-'));
++        if (r) {
++          const H = api.width >= api.height;
++          const aj = () => {
++            try {
++              if (H) r.group.api.setSize({ width: Math.round((api.width * 3) / 4) });
++              else r.group.api.setSize({ height: Math.round((api.height * 3) / 4) });
++            } catch { /* */ }
++          };
++          setTimeout(aj, 60);
++          setTimeout(aj, 400);
++        }
++      }
+     } catch (err) {
+       log.ui.error('Failed to open PDF panel:', err);
+     }
+@@ -458,16 +506,39 @@ export function ensureDatabaseEditorPanel(): void {
+ }
+ 
+ // ── 2R Tools: dividir a tela (placa / PDF / microscópio) ─────────────────
+-export type SplitLayout = 'board' | 'board-pdf' | 'board-mic' | 'pdf-mic' | 'board-pdf-mic';
++export type SplitLayout = 'board' | 'pdf' | 'board-pdf' | 'board-pdf-23' | 'board-pdf-v' | 'board-pdf-v23' | 'pdf-board-v' | 'board-mic' | 'pdf-mic' | 'board-pdf-mic';
+ 
+ export const SPLIT_LABELS: Record<SplitLayout, string> = {
+   'board': 'Só a placa',
++  'pdf': 'Só o PDF',
+   'board-pdf': 'Placa | PDF',
++  'board-pdf-23': 'Placa grande | PDF',
++  'board-pdf-v': 'Placa em cima, PDF embaixo',
++  'board-pdf-v23': 'Placa grande em cima, PDF embaixo',
++  'pdf-board-v': 'PDF em cima, placa embaixo',
+   'board-mic': 'Placa | Microscópio',
+   'pdf-mic': 'PDF | Microscópio',
+   'board-pdf-mic': 'Placa | PDF | Microscópio',
+ };
+ 
++// 2R 16/10/2026: recentraliza placa/esquemático ao redimensionar a janela (Configurações › bv_fit_resize → window.__2rFitResize)
++try {
++  let _ft: ReturnType<typeof setTimeout> | undefined;
++  window.addEventListener('resize', () => {
++    if ((window as unknown as { __2rFitResize?: boolean }).__2rFitResize === false) return;
++    clearTimeout(_ft);
++    _ft = setTimeout(() => { try { viewCommands.fit(); } catch { /* */ } }, 350);
++  });
++} catch { /* */ }
++// 2R 13/10/2026: o app escolhe o layout (window.__2rLayout(m))
++try {
++  (window as unknown as { __2rLayout?: (m: SplitLayout) => void }).__2rLayout = (m: SplitLayout) => {
++    try { localStorage.setItem('2r-split-layout', m); } catch { /* */ }
++    applySplitLayout(m);
++    setTimeout(() => { try { window.dispatchEvent(new Event('resize')); viewCommands.fit(); } catch { /* */ } }, 450);
++  };
++} catch { /* */ }
++
+ /** Arruma os painéis lado a lado conforme a escolha do técnico. Abre o PDF
+  *  ligado à placa e o microscópio quando a escolha pede e eles não estão abertos. */
+ export function applySplitLayout(layout: SplitLayout, _retry = 0): void {
+@@ -502,6 +573,30 @@ export function applySplitLayout(layout: SplitLayout, _retry = 0): void {
+       api.maximizeGroup(board!);
+       return;
+     }
++    // 2R 13/10/2026: modelos de layout (Roger)
++    if (layout === 'pdf' && pdf) {
++      if (board) pdf.api.moveTo({ group: board.group, position: 'center' });
++      pdf.api.setActive();
++      api.maximizeGroup(pdf);
++      return;
++    }
++    if ((layout === 'board-pdf-v' || layout === 'pdf-board-v') && board && pdf) {
++      pdf.api.moveTo({ group: board.group, position: layout === 'board-pdf-v' ? 'bottom' : 'top' });
++      board.api.setActive();
++      return;
++    }
++    if ((layout === 'board-pdf-23' || layout === 'board-pdf-v23') && board && pdf) {
++      const R = layout === 'board-pdf-23';
++      pdf.api.moveTo({ group: board.group, position: R ? 'right' : 'bottom' });
++      setTimeout(() => {
++        try {
++          if (R) board.group.api.setSize({ width: Math.round((api.width * 2) / 3) });
++          else board.group.api.setSize({ height: Math.round((api.height * 2) / 3) });
++        } catch { /* */ }
++      }, 60);
++      board.api.setActive();
++      return;
++    }
+     if (layout === 'board-pdf' && board && pdf) {
+       pdf.api.moveTo({ group: board.group, position: 'right' });
+     } else if (layout === 'board-mic' && board && mic) {
+-- 
+2.43.0
+

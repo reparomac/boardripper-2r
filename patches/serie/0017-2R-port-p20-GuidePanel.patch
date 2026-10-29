@@ -1,0 +1,309 @@
+From 8ef08ffdb1c7b1565abeb55eac80ca049a279629 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:42:26 -0300
+Subject: [PATCH 17/22] 2R port p20 GuidePanel
+
+---
+ src/frontend/src/components/Toolbar.tsx |   3 +-
+ src/frontend/src/panels/AcervoPanel.tsx |   4 +-
+ src/frontend/src/panels/GuidePanel.tsx  | 158 +++++++++++++++++++-----
+ 3 files changed, 128 insertions(+), 37 deletions(-)
+
+diff --git a/src/frontend/src/components/Toolbar.tsx b/src/frontend/src/components/Toolbar.tsx
+index e4c8e5bf..cdc3c5d7 100644
+--- a/src/frontend/src/components/Toolbar.tsx
++++ b/src/frontend/src/components/Toolbar.tsx
+@@ -742,7 +742,7 @@ export function Toolbar() {
+           centre, window mode / about / version on the right. Side, rotate,
+           mirror, butterfly and traces live in the board ribbon now — same
+           store actions, same shortcuts, only the button's home moved. ── */}
+-      <SidebarCycleButton />
++      {/* 2R 22/10/2026: o botão do painel lateral foi para o canto direito da barra */}
+       {/* 2R Tools: menus de texto na MESMA barra dos ícones (Roger, 10/10/2026: «a barra de
+           ícones pode subir para a mesma barra do menu… ganha espaço de visualização») */}
+       {IS_2R && <MenuBar2R inline />}
+@@ -795,6 +795,7 @@ export function Toolbar() {
+ 
+       <InfoBadge />
+       {!isElectron() && !isLiteBuild() && <UpdateBadge update={update} />}
++      <SidebarCycleButton />
+       {isLiteBuild() && !isOfflineBuild() && <DownloadOfflineButton />}
+     </div>
+   );
+diff --git a/src/frontend/src/panels/AcervoPanel.tsx b/src/frontend/src/panels/AcervoPanel.tsx
+index a1c40a73..a1fd6184 100644
+--- a/src/frontend/src/panels/AcervoPanel.tsx
++++ b/src/frontend/src/panels/AcervoPanel.tsx
+@@ -1,5 +1,5 @@
+ import { useEffect, useRef, useState } from 'react';
+-import { IconCloud, IconCloudUpload, IconFileText, IconCpu } from '@tabler/icons-react';
++import { IconCloudUpload, IconFileText, IconCpu } from '@tabler/icons-react';
+ import { r2, type R2Row } from '../r2/env';
+ 
+ /**
+@@ -217,7 +217,7 @@ export function AcervoPanel() {
+   if (!r2()) return null;
+   return (
+     <div className="r2acv">
+-      <div className="r2acv-title"><IconCloud size={16} /> Acervo 2R <span className="r2acv-sub">online</span></div>
++      <div className="r2acv-title">Acervo 2R <span className="r2acv-sub">online</span></div>
+       <Search />
+       <Upload />
+     </div>
+diff --git a/src/frontend/src/panels/GuidePanel.tsx b/src/frontend/src/panels/GuidePanel.tsx
+index 7cd6f80a..e00ef9db 100644
+--- a/src/frontend/src/panels/GuidePanel.tsx
++++ b/src/frontend/src/panels/GuidePanel.tsx
+@@ -5,6 +5,26 @@ import { guideStore, resolve, seqWhereNow, matchesBoard } from '../r2/guide-stor
+ import { meterStore } from '../r2/meter-store';
+ import { boardStore } from '../store/board-store';
+ import { LOGO_2R_PRINT } from '../assets/logo2r-print';
++import type { Step } from '../r2/guide-store';
++import { jsx as r2jsx, jsxs as r2jsxs, Fragment as R2Frag } from 'react/jsx-runtime';
++/** runtime JSX passado às ajudas do index.html (elas montam elementos com d.jsx / d.jsxs) */
++const R2D = { jsx: r2jsx, jsxs: r2jsxs, Fragment: R2Frag };
++
++/* 2R 26/10/2026: ajudas que vêm do index.html (padrão de valores do SDS, grupos do estudo, rótulos, esperado) */
++type GInfo = { gn: number; gk: number; gm: number; nome?: string; cor: string; novo?: boolean };
++type R2G = {
++  __r2Num?: (k: string, v: string) => string | null;
++  __r2U?: (v: string, u: string) => string;
++  __r2GInfo?: (a: unknown, i: number) => GInfo | null;
++  __r2GrpOn?: () => boolean;
++  __r2GrpSet?: (v: boolean) => void;
++  __r2Lbl?: (r: unknown, cur: unknown) => string;
++  __r2Esp?: (d: unknown, st: Step) => React.ReactNode;
++  __r2Notes?: (d: unknown, note: string, cls: string, hud?: boolean) => React.ReactNode;
++  __2rToast?: (m: string, k?: string) => void;
++};
++const r2g = window as unknown as R2G;
++const fmtV = (v: string) => (r2g.__r2U ? r2g.__r2U(v, 'V') : v + ' V');
+ 
+ /** 2R Tools: aba «Teleguiado» — cola o roteiro (sequência de start), converte e
+  *  anda pelos pontos na placa com as setas do teclado. Beta. */
+@@ -22,8 +42,18 @@ function Cell({ i, k, val, ph }: { i: number; k: 'v' | 'd' | 'r'; val?: string;
+     <input className={`r2gd-cell ${val ? 'has' : ''}`} value={shown} placeholder={ph}
+            onClick={e => e.stopPropagation()}
+            onFocus={() => { setV(val || ''); setFocus(true); }}
+-           onChange={e => setV(e.target.value)}
+-           onBlur={() => { setFocus(false); if ((v || '') !== (val || '')) guideStore.editStep(i, { [k]: v.trim() || undefined }); }}
++           onChange={e => setV(e.target.value.replace(/\./g, ','))}
++           onBlur={() => {
++             setFocus(false);
++             // 2R 26/10/2026 (Roger: «pode ser com vírgula ou ponto… travar no padrão do SDS»)
++             const z = r2g.__r2Num ? r2g.__r2Num(k, v) : v.trim();
++             if (z === null) {
++               setV(val || '');
++               r2g.__2rToast?.('Valor inválido. Use número, ex.: 3,3' + (k === 'r' ? ' (aceita 10k, 1,2M)' : ''), 'error');
++               return;
++             }
++             if ((z || '') !== (val || '')) guideStore.editStep(i, { [k]: z || undefined });
++           }}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(val || ''); (e.target as HTMLInputElement).blur(); } }} />
+   );
+ }
+@@ -71,14 +101,24 @@ function Credit() {
+   );
+ }
+ 
+-/** Editor do passo: nets, observação e ponto. */
++/** Editor do passo: nets, observação, ponto e valor esperado (2R 26/10/2026: cabeçalho do grupo e tipo da medida). */
+ function StepEditor({ i, onDone }: { i: number; onDone: () => void }) {
+   const st = guideStore.active!.steps[i];
++  const gm = st.gm || 1;
++  const K0: 'v' | 'd' | 'r' = st.tipo || (st.id ? 'd' : st.ir ? 'r' : 'v');
+   const [nets, setNets] = useState(st.nets.join(', '));
+   const [note, setNote] = useState(st.note);
+   const [point, setPoint] = useState(st.point || '');
++  const [tp, setTp] = useState<'v' | 'd' | 'r'>(K0);
++  const [ex, setEx] = useState<string>((st as unknown as Record<string, string | undefined>)['i' + K0] || '');
++  const [er, setEr] = useState('');
+   const ok = () => {
+-    guideStore.editStep(i, { nets: nets.split(/[,;]+/).map(x => x.trim()).filter(Boolean), note: note.trim(), point: point.trim().toUpperCase() || undefined });
++    const z = ex.trim() ? (r2g.__r2Num ? r2g.__r2Num(tp, ex) : ex.trim()) : '';
++    if (z === null) { setEr('Valor esperado inválido. Use número, ex.: 3,3' + (tp === 'r' ? ' (aceita 10k, 1,2M)' : '')); return; }
++    const up: Partial<Step> = { nets: nets.split(/[,;]+/).map(x => x.trim()).filter(Boolean), note: note.trim(), point: point.trim().toUpperCase() || undefined,
++      tipo: tp, iv: undefined, id: undefined, ir: undefined };
++    (up as Record<string, unknown>)['i' + tp] = z || undefined;
++    guideStore.editStep(i, up);
+     onDone();
+   };
+   const fromBoard = () => {
+@@ -87,14 +127,36 @@ function StepEditor({ i, onDone }: { i: number; onDone: () => void }) {
+     const pin = part && sel?.pinIndex != null && sel.pinIndex >= 0 ? part.pins[sel.pinIndex] : null;
+     if (part && pin) { setPoint(`${part.name}.${pin.number || pin.name}`); if (!nets.trim() && pin.net) setNets(pin.net); }
+   };
++  const med = st.v ? fmtV(st.v) : st.d ? st.d + ' (diodo)' : st.r ? st.r + ' Ω' : '—';
++  const GIe = r2g.__r2GInfo ? r2g.__r2GInfo(guideStore.active, i) : null;
++  const cab = gm > 1
++    ? 'Grupo ' + String(st.gn || '').padStart(2, '0') + (GIe && GIe.nome ? ' — ' + GIe.nome : '') + ' · passo ' + (st.gk || 1) + ' de ' + gm
++    : 'Passo ' + String(st.n).padStart(2, '0');
+   return (
+-    <span className="r2gd-edit" onClick={e => e.stopPropagation()} onKeyDown={e => { if (e.key === 'Enter') ok(); if (e.key === 'Escape') onDone(); }}>
++    <span className="r2gd-edit" onClick={e => e.stopPropagation()}
++          onKeyDown={e => { if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'SELECT') ok(); if (e.key === 'Escape') onDone(); }}>
++      <span className="r2gd-edhead">
++        <b>{'Editando: ' + cab}</b>
++        <span>{' · nº ' + st.n + (st.nets[0] ? ' · ' + st.nets[0] : '') + (st.point ? ' · ' + st.point : '')}</span>
++        {st.name ? <span className="r2gd-edname">{st.name}</span> : null}
++      </span>
+       <label>Nets (vírgula separa)<input autoFocus value={nets} onChange={e => setNets(e.target.value)} placeholder="PP5V_AON" /></label>
+-      <label>Observação<input value={note} onChange={e => setNote(e.target.value)} placeholder="ex.: 5 V com o carregador ligado" /></label>
+       <label>Ponto de medição<span className="r2gd-edit-row">
+         <input value={point} onChange={e => setPoint(e.target.value)} placeholder="automático (capacitor mais fácil)" />
+         <button onClick={fromBoard} title="Pega o pino que está selecionado na placa">pino selecionado</button>
+       </span></label>
++      <span className="r2gd-edit-row">
++        <label>Medida<select value={tp} onChange={e => { setTp(e.target.value as 'v' | 'd' | 'r'); setEr(''); }}>
++          <option value="v">Tensão (V)</option>
++          <option value="d">Diodo</option>
++          <option value="r">Resistência (Ω)</option>
++        </select></label>
++        <label>Valor esperado<input value={ex} inputMode="decimal" onChange={e => { setEx(e.target.value.replace(/\./g, ',')); setEr(''); }}
++          placeholder={tp === 'r' ? 'ex.: 10k ou 100' : tp === 'd' ? 'ex.: 0,512 ou OL' : 'ex.: 3,3'} /></label>
++      </span>
++      <span className="r2gd-edinfo">{'Medido agora: ' + med + ' · padrão do SDS: vírgula — tensão com 2 casas e V (3,30 V) · diodo 0,512 · resistência 10,00k Ω'}</span>
++      {er ? <span className="r2gd-miss">{er}</span> : null}
++      <label>Observação<input value={note} onChange={e => setNote(e.target.value)} placeholder="ex.: 5 V com o carregador ligado" /></label>
+       <span className="r2gd-edit-row">
+         <button className="r2acv-send r2meter-btn" onClick={ok}>Salvar</button>
+         <button className="r2meter-btn r2meter-off" onClick={onDone}>Cancelar</button>
+@@ -106,14 +168,14 @@ function StepEditor({ i, onDone }: { i: number; onDone: () => void }) {
+ type ResT = ReturnType<typeof resolve>;
+ function StepTable({ res, showNets }: { res: ResT[]; showNets: boolean }) {
+   const idealKey = (st: { v?: string; d?: string; r?: string }): 'iv' | 'id' | 'ir' => (st.d ? 'id' : st.r ? 'ir' : 'iv');
+-  const measured = (st: { v?: string; d?: string; r?: string }) => st.v ? `${st.v} V` : st.d ? `${st.d}` : st.r ? `${st.r} Ω` : '—';
++  const measured = (st: { v?: string; d?: string; r?: string }) => st.v ? fmtV(st.v) : st.d ? `${st.d}` : st.r ? `${st.r} Ω` : '—';
+   const idealVal = (st: { iv?: string; id?: string; ir?: string }, k: 'iv' | 'id' | 'ir') => st[k] ?? '';
+   return (
+     <div className="r2gd-tbl">
+       <div className="r2gd-thd"><span>#</span><span>Nome do teste</span><span>Medido</span><span>Valor certo</span><span>★</span></div>
+       {res.map((r, i) => {
+         const st = r.step; const k = idealKey(st);
+-        const out = st.v && st.iv ? Math.abs(parseFloat(st.v) - parseFloat(st.iv)) > Math.max(Math.abs(parseFloat(st.iv)) * 0.02, 0.005) : false;
++        const out = st.v && st.iv ? Math.abs(fnum(st.v)! - fnum(st.iv)!) > Math.max(Math.abs(fnum(st.iv)!) * 0.02, 0.005) : false;
+         return (
+           <div key={i} className={`r2gd-trow ${out ? 'out' : ''}`}>
+             <span className="r2gd-tn">{String(st.n).padStart(2, '0')}</span>
+@@ -189,8 +251,8 @@ td.res.ok { color: #52606D; }
+ function StepReport({ res, title, showNets }: { res: ResT[]; title: string; showNets: boolean }) {
+   const rows = res.map(r => {
+     const st = r.step;
+-    const med = st.v ? { v: `${st.v} V`, n: fnum(st.v), tipo: 'Tensão' } : st.d ? { v: st.d, n: fnum(st.d), tipo: 'Diodo' } : st.r ? { v: `${st.r} Ω`, n: fnum(st.r), tipo: 'Resist.' } : { v: '—', n: null, tipo: '—' };
+-    const ideal = st.iv ? `${st.iv} V` : st.id ? st.id : st.ir ? `${st.ir} Ω` : '—';
++    const med = st.v ? { v: fmtV(st.v), n: fnum(st.v), tipo: 'Tensão' } : st.d ? { v: st.d, n: fnum(st.d), tipo: 'Diodo' } : st.r ? { v: `${st.r} Ω`, n: fnum(st.r), tipo: 'Resist.' } : { v: '—', n: null, tipo: '—' };
++    const ideal = st.iv ? fmtV(st.iv) : st.id ? st.id : st.ir ? `${st.ir} Ω` : '—';
+     const idn = fnum(st.iv || st.id || st.ir);
+     let resu: 'ok' | 'fora' | 'sem' = 'sem';
+     if (med.n != null && idn != null) resu = Math.abs(med.n - idn) <= Math.max(Math.abs(idn) * 0.02, 0.005) ? 'ok' : 'fora';
+@@ -362,6 +424,8 @@ export function GuidePanel() {
+           {view === 'lista' && <>
+           <label className="r2acv-check"><input type="checkbox" checked={guideStore.pdfFollow} onChange={e => guideStore.setPdfFollow(e.target.checked)} /> Esquemático junto: cada passo procura a net no PDF</label>
+           <label className="r2acv-check"><input type="checkbox" checked={showNets} onChange={e => toggleNets(e.target.checked)} /> Mostrar os nomes das nets</label>
++          <label className="r2acv-check"><input type="checkbox" checked={!r2g.__r2GrpOn || r2g.__r2GrpOn()}
++            onChange={e => { r2g.__r2GrpSet?.(e.target.checked); guideStore.setPdfFollow(guideStore.pdfFollow); }} /> Dividir por grupos (desmarcado: um passo por linha)</label>
+           <div className="r2meter-actions">
+             <button className="r2meter-btn r2meter-off" title="Clique num pino na placa e aperte: vira um passo (a net dele, com esse pino como ponto)"
+                     onClick={() => { const l = guideStore.addSelectedPin(); setMsg(l ? `Passo novo: ${l}` : 'Clique primeiro num pino na placa.'); }}>＋ Adicionar o pino selecionado como passo</button>
+@@ -370,6 +434,11 @@ export function GuidePanel() {
+           <div className="r2acv-note">Com o multímetro ligado (aba Medições), cada leitura entra sozinha na coluna do passo atual (tensão, diodo ou resistência). Também dá para digitar.</div>
+           <div className="r2acv-note">Com ele ligado: <b>→ ↓</b> próximo passo · <b>← ↑</b> anterior · <b>Tab</b> outro ponto da mesma net · <b>Esc</b> desliga.</div>
+           <Credit />
++          {/* 2R 16/10/2026: REPLAY — rever só os passos já medidos (somente leitura) */}
++          <button className="r2acv-send r2meter-btn" title="Rever, passo a passo, só os pontos já medidos nesta placa (não grava nada)"
++                  onClick={() => { if (guideStore.replaying) guideStore.replay(false); else if (!guideStore.replay(true)) setMsg('Nenhum passo medido neste roteiro ainda.'); }}>
++            {guideStore.replaying ? '■ Sair do replay' : '⏪ Rever medições'}
++          </button>
+           {seqWhereNow() === 'placa' && <div className="r2acv-note">Edições salvas junto do boardview (pasta da placa).</div>}
+           {a.builtin && <div className="r2acv-note">Roteiro de fábrica da 2R. <button className="r2cv-link" onClick={() => guideStore.resetBuiltin()}>voltar ao original</button></div>}
+           </>}
+@@ -377,41 +446,62 @@ export function GuidePanel() {
+           <div className="r2gd-cols"><span>#</span><span>Net / ponto</span><span>Tensão</span><span>Diodo</span><span>Resist.</span></div>
+           <div className="r2gd-steps">
+             {res.map((r, i) => {
+-              const cur = i === guideStore.pos;
++              // 2R 16/10/2026: 1 linha por passo — sub-passos do mesmo grupo ficam numa linha só (window.__r2GrpOn)
++              const GRP = !r2g.__r2GrpOn || r2g.__r2GrpOn();
++              const GI = r2g.__r2GInfo ? r2g.__r2GInfo(guideStore.active, i) : null;
++              const gs = GRP && (r.step.gm || 1) > 1;
++              const cp = res[guideStore.pos];
++              const gin = !!(gs && cp && cp.step.gid === r.step.gid);
++              const cur = i === guideStore.pos || (gin && r.step.gk === 1);
++              const ix = gin ? guideStore.pos : i;
++              const SS = gin ? cp.step : r.step;
++              const ed = editing != null && cur;
++              const FR = gin ? cp : r;
+               return (
+-                <div key={i} role="button" tabIndex={-1} className={`r2gd-step ${cur ? 'cur' : ''} ${r.nets.length ? '' : 'miss'}`}
+-                     onClick={() => { if (editing === i) return; if (!guideStore.on) guideStore.start(); guideStore.go(i); }}>
+-                  <span className="r2gd-n">{String(r.step.n).padStart(2, '0')}</span>
++                <div key={i} role="button" tabIndex={-1}
++                     className={`r2gd-step ${cur ? 'cur' : ''} ${r.nets.length ? '' : 'miss'} ${GRP && (r.step.gk || 0) > 1 ? 'r2gd-hide' : ''}`}
++                     style={GI ? { boxShadow: 'inset 3px 0 0 ' + GI.cor } : undefined}
++                     onClick={() => { if (ed) return; if (!guideStore.on) guideStore.start(); if (!gin) guideStore.go(i); }}>
++                  <span className="r2gd-n">{GRP ? String(r.step.gn || r.step.n).padStart(2, '0') + (gin ? '.' + cp.step.gk : '') : String(r.step.n).padStart(2, '0')}</span>
+                   <span className="r2gd-body">
+-                    <span className="r2gd-nets">{showNets ? (r.step.nets.join(', ') || <i>(passo vazio — clique em ✎)</i>) : (r.points[0]?.label || r.step.point || <i className="r2hist-sub">net oculta</i>)}</span>
+-                    {r.step.note && editing !== i && <span className="r2hist-sub">{r.step.note}</span>}
++                    {GI && (GRP || r.step.gk === 1) && <span className="r2gd-gname" style={{ color: GI.cor }}>
++                      {(GRP ? '' : '▸ novo grupo · ') + 'Grupo ' + String(GI.gn).padStart(2, '0') + (GI.nome ? ' — ' + GI.nome : '') + (GI.gm > 1 ? ' (' + GI.gm + ' passos)' : '')}
++                    </span>}
++                    <span className="r2gd-nets">{showNets
++                      ? ((gs ? (gin ? cp.step.nets[0] : r.step.nets[0]) + '  (' + (gin ? cp.step.gk : 1) + '/' + r.step.gm + ')' : r.step.nets.join(', ')) || <i>(passo vazio — clique em ✎)</i>)
++                      : ((r2g.__r2Lbl ? r2g.__r2Lbl(r, gin ? res[guideStore.pos] : null) : r.points[0]?.label) || r.step.point || <i className="r2hist-sub">net oculta</i>)}</span>
++                    {SS.note && !ed && r2g.__r2Notes?.(R2D, SS.note, 'r2hist-sub')}
++                    {!ed && r2g.__r2Esp && r2g.__r2Esp(R2D, SS)}
+                   </span>
+-                  <Cell i={i} k="v" val={r.step.v} ph="V" />
+-                  <Cell i={i} k="d" val={r.step.d} ph="diodo" />
+-                  <Cell i={i} k="r" val={r.step.r} ph="Ω" />
+-                  {(cur || editing === i || r.missing.length > 0) && (
+-                    <div className="r2gd-extra" onClick={e => { if (editing === i || cur) e.stopPropagation(); }}>
+-                      {editing === i ? <StepEditor i={i} onDone={() => setEditing(null)} /> : (<>
+-                        {cur && r.points.length > 0 && (
++                  <Cell key={'v' + ix} i={ix} k="v" val={SS.v} ph="V" />
++                  <Cell key={'d' + ix} i={ix} k="d" val={SS.d} ph="diodo" />
++                  <Cell key={'r' + ix} i={ix} k="r" val={SS.r} ph="Ω" />
++                  {(cur || r.missing.length > 0) && (
++                    <div className="r2gd-extra" onClick={e => { if (cur) e.stopPropagation(); }}>
++                      {ed ? <StepEditor key={'ed' + ix} i={ix} onDone={() => setEditing(null)} /> : (<>
++                        {cur && FR.points.length > 0 && (
+                           <span className="r2gd-pts">
+-                            {r.points.slice(0, 6).map((p, k) => (
+-                              <span key={k} role="button" className={`r2gd-pt ${k === guideStore.pointIdx % r.points.length ? 'sel' : ''} ${p.fixed ? 'fixed' : ''}`}
++                            {FR.points.slice(0, 6).map((p, k) => (
++                              <span key={k} role="button" className={`r2gd-pt ${k === guideStore.pointIdx % FR.points.length ? 'sel' : ''} ${p.fixed ? 'fixed' : ''}`}
+                                     title={p.fixed ? 'Ponto escolhido à mão' : ''}
+                                     onClick={e => { e.stopPropagation(); guideStore.usePoint(k); }}>{p.fixed ? '◆ ' : ''}{p.label} · {KIND[p.kind]}</span>
+                             ))}
+-                            {r.points.length > 6 && <span className="r2hist-sub">+{r.points.length - 6}</span>}
++                            {FR.points.length > 6 && <span className="r2hist-sub">+{FR.points.length - 6}</span>}
+                           </span>
+                         )}
+-                        {r.missing.length > 0 && <span className="r2gd-miss">não achei nesta placa: {r.missing.join(', ')}</span>}
++                        {FR.missing.length > 0 && <span className="r2gd-miss">não achei nesta placa: {FR.missing.join(', ')}</span>}
+                         {cur && (
+                           <span className="r2gd-tools">
+-                            <button title="Editar este passo" onClick={() => setEditing(i)}>✎ editar</button>
+-                            <button title="Usar o pino selecionado na placa como ponto deste passo" onClick={() => { const l = guideStore.pinSelectedAsPoint(i); setMsg(l ? `Ponto do passo ${r.step.n}: ${l}` : 'Clique primeiro no pino na placa.'); }}>◆ fixar pino selecionado</button>
+-                            {r.step.point && <button title="Voltar a escolher o ponto sozinho" onClick={() => guideStore.clearPoint(i)}>automático</button>}
+-                            <button title="Subir" onClick={() => guideStore.moveStep(i, -1)}>↑</button>
+-                            <button title="Descer" onClick={() => guideStore.moveStep(i, 1)}>↓</button>
+-                            <button title="Novo passo depois deste" onClick={() => { guideStore.insertStep(i); setEditing(i + 1); }}>+ passo</button>
+-                            <button title="Apagar este passo" onClick={() => guideStore.deleteStep(i)}>apagar</button>
++                            {gs && <button title="Passo anterior do grupo (← ↑)" disabled={!gin || (cp.step.gk || 1) <= 1} onClick={() => guideStore.prev()}>‹ anterior</button>}
++                            {gs && <button title="Próximo passo do grupo (→ ↓)" disabled={gin && (cp.step.gk || 1) >= (r.step.gm || 1)}
++                                           onClick={() => { if (gin) guideStore.next(); else { if (!guideStore.on) guideStore.start(); guideStore.go(i + 1); } }}>próximo ›</button>}
++                            <button title="Editar este passo" onClick={() => setEditing(ix)}>✎ editar</button>
++                            <button title="Usar o pino selecionado na placa como ponto deste passo" onClick={() => { const l = guideStore.pinSelectedAsPoint(ix); setMsg(l ? `Ponto do passo ${SS.n}: ${l}` : 'Clique primeiro no pino na placa.'); }}>◆ fixar pino selecionado</button>
++                            {SS.point && <button title="Voltar a escolher o ponto sozinho" onClick={() => guideStore.clearPoint(ix)}>automático</button>}
++                            <button title="Subir" onClick={() => guideStore.moveStep(ix, -1)}>↑</button>
++                            <button title="Descer" onClick={() => guideStore.moveStep(ix, 1)}>↓</button>
++                            <button title="Novo passo depois deste" onClick={() => { guideStore.insertStep(ix); setEditing(ix + 1); }}>+ passo</button>
++                            <button title="Apagar este passo" onClick={() => guideStore.deleteStep(ix)}>apagar</button>
+                           </span>
+                         )}
+                       </>)}
+-- 
+2.43.0
+

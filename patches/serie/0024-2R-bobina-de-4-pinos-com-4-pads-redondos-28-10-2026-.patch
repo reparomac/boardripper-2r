@@ -1,0 +1,47 @@
+From 4c3743daeba3edcfe603647e62a76b7f1c2cd8e0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 21:40:51 -0300
+Subject: [PATCH] 2R: bobina de 4 pinos com 4 pads redondos (28/10/2026 21h39)
+
+---
+ src/frontend/src/r2/hand-geom.ts | 16 +++++++---------
+ 1 file changed, 7 insertions(+), 9 deletions(-)
+
+diff --git a/src/frontend/src/r2/hand-geom.ts b/src/frontend/src/r2/hand-geom.ts
+index c0908678..61693f17 100644
+--- a/src/frontend/src/r2/hand-geom.ts
++++ b/src/frontend/src/r2/hand-geom.ts
+@@ -1376,7 +1376,7 @@ function R2drmos2(P) {
+   P.__r2drmos = 2;
+   return !0;
+ }
+-/*2R 28/10/2026 (print do Roger, L8111/L8112/L8241 da 820-03285 — «as bobinas estão maiores»; mockup aprovado: «os pads… prefiro manter único, não nos cantos, mas pode alterar o tamanho»): bobina dupla de 4 pinos em 2×2 (dois pinos de um lado, dois do outro). Um pad único por lado (os dois pinos do mesmo lado juntos, ao longo do lado curto) e o corpo justo em volta dos pinos, com a redução das bobinas de 2 pinos. window.__r2Bob4Off=true desliga*/ function R2bob4(b) {
++/*2R 28/10/2026 (print do Roger, L8111/L8112/L8241 da 820-03285 — «as bobinas estão maiores»; mockup aprovado: «os pads… prefiro manter único, não nos cantos, mas pode alterar o tamanho»): bobina dupla de 4 pinos em 2×2 (dois pinos de um lado, dois do outro). Primeiro um pad único por lado; depois (21h39) um pad redondo por pino. Corpo justo em volta dos pinos, com a redução das bobinas de 2 pinos. window.__r2Bob4Off=true desliga*/ function R2bob4(b) {
+   if (!b || !b.parts || window.__r2Bob4Off === !0) return;
+   for (const P of b.parts) {
+     try {
+@@ -1392,15 +1392,13 @@ function R2drmos2(P) {
+       const s = vert ? dy : dx, l = vert ? dx : dy;
+       const rq = Math.max(...P.pins.map((q) => q.radius || 0));
+       const r = Math.min(rq > 0 ? rq : s * 0.35, s * 0.4, l * 0.3);
+-      const a = r * 0.6, h = s / 2 + r * 0.8; /*pad: meia largura (lado longo) e meio comprimento (lado curto)*/
+-      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
++      /*28/10 21h39 (Roger: «essa bobina tem 4 pinos mesmo? se tiver, mantém os 4 pinos, mas redondos»): tem — são duas fases
++        (BUCK…_LX1 / LX3) de um lado e a saída do outro. Um pad redondo por pino, no raio do arquivo (limitado para não encostar)*/
++      const rp = Math.min(r * 0.8, s * 0.4, l * 0.3);
+       for (const q of P.pins) {
+-        const left = vert ? q.position.x < cx : q.position.y < cy;
+-        const c = vert ? (left ? x0 : x1) : (left ? y0 : y1);
+-        q.padBounds = vert
+-          ? { minX: c - a, minY: cy - h, maxX: c + a, maxY: cy + h }
+-          : { minX: cx - h, minY: c - a, maxX: cx + h, maxY: c + a };
+-        delete q.padShape;
++        const x = q.position.x, y = q.position.y;
++        q.padBounds = { minX: x - rp, minY: y - rp, maxX: x + rp, maxY: y + rp };
++        q.padShape = "round";
+         delete q.padWidth; delete q.padHeight; delete q.padAngleDeg; delete q.padPolygon; delete q.padCornerRadius;
+       }
+       const eL = r * 0.8, eS = r * 0.9;
+-- 
+2.43.0
+

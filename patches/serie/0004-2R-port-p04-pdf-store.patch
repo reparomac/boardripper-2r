@@ -1,0 +1,118 @@
+From 9ccabae53286610f776ac668a2e5ab5266bed92e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:25:31 -0300
+Subject: [PATCH 04/22] 2R port p04 pdf-store
+
+---
+ src/frontend/src/store/pdf-store.ts | 55 +++++++++++++++++++++++++----
+ 1 file changed, 48 insertions(+), 7 deletions(-)
+
+diff --git a/src/frontend/src/store/pdf-store.ts b/src/frontend/src/store/pdf-store.ts
+index 32c66756..8aee5b66 100644
+--- a/src/frontend/src/store/pdf-store.ts
++++ b/src/frontend/src/store/pdf-store.ts
+@@ -12,7 +12,7 @@ import { isOfflineBuild } from './build-mode';
+ import { navHistoryStore } from './nav-history-store';
+ import { renderSettingsStore } from './render-settings';
+ import type { PdfPlace, PdfMatchRef } from './nav-history';
+-import { looseFind } from '../r2/loose-match';
++import { looseFind, r2BuscaExata } from '../r2/loose-match';
+ 
+ // ES2025 shims that pdf.js calls on the main thread live in src/polyfills.ts
+ // (imported first in main.tsx); the worker's copies are in the patch.
+@@ -1345,17 +1345,19 @@ class PdfStore extends Emitter {
+    *  is forced single-page (continuous can't stack rotated pages cleanly), but
+    *  the user's chosen `pageMode` is preserved — see `isDocSinglePage` — so
+    *  returning to 0° restores their continuous-scroll preference. */
+-  rotate(fileName: string, dir: 'cw' | 'ccw') {
++  /* 2R 27/10/2026 (Roger: «remove a função de girar o PDF, não faz sentido»): o PDF fica sempre em pé;
++     os atalhos/botões de girar passam a girar só a placa */
++  rotate(fileName: string, _dir: 'cw' | 'ccw') {
+     const d = this._documents.get(fileName);
+-    if (!d) return;
+-    const delta = dir === 'cw' ? 90 : -90;
+-    d.rotation = (((d.rotation + delta) % 360) + 360) % 360;
+-    this.notify();
++    if (d && d.rotation !== 0) { d.rotation = 0; this.notify(); }
+   }
+ 
+   /** Rotate the active doc (keyboard shortcuts). */
+   rotateActive(dir: 'cw' | 'ccw') {
+-    if (this._activeFileName) this.rotate(this._activeFileName, dir);
++    try {
++      const b = (window as unknown as { __2rBoardGet?: () => { rotateCCW(): void; rotateCW(): void } }).__2rBoardGet?.();
++      if (b) { if (dir === 'ccw') b.rotateCCW(); else b.rotateCW(); }
++    } catch { /* */ }
+   }
+ 
+   /** Toggle the named doc's horizontal mirror. */
+@@ -1401,6 +1403,7 @@ class PdfStore extends Emitter {
+   searchText(query: string, source: 'user' | 'lookup' = 'user') {
+     if (!this._active) return;
+     this._runSearch(this._active, query, source, true);
++    if (r2BuscaExata('pdf')) this._r2Exato(this._active, query, false);
+     if (source === 'user' && query.trim()) {
+       const d = this._active;
+       navHistoryStore.recordQuery('pdf', query, { results: d.matches.length, place: this.navPlaceFor(d.fileName) ?? undefined });
+@@ -1419,6 +1422,7 @@ class PdfStore extends Emitter {
+     const doc = this._documents.get(fileName);
+     if (!doc || !primary.trim()) return;
+     this._runSearch(doc, primary, source, false);
++    this._r2Exato(doc, primary, true); // 2R 12/10/2026: duplo clique acha só a peça inteira (C510 não pega C5102)
+     if (doc.matches.length > 1) {
+       // Re-pick among occurrences by context proximity + biggest font (the
+       // scorer falls back to font, then page-proximity, when context is sparse).
+@@ -1509,6 +1513,42 @@ class PdfStore extends Emitter {
+     this.notify();
+   }
+ 
++  /** 2R: deixa só as ocorrências da palavra inteira.
++   *  dupClique=true (12/10/2026, lookup): letras/números contam como palavra; se nenhuma bater, não mexe.
++   *  dupClique=false (26/10/2026, busca «Exata» do PDF): «_» também conta; se nenhuma bater, fica sem resultado. */
++  _r2Exato(e: PdfDocument, t: string, dupClique: boolean) {
++    if (!e.matches.length || !t || /[\s@]/.test(t.trim())) return;
++    const T = t.trim().toUpperCase();
++    const W = dupClique ? /[A-Z0-9]/i : /[A-Z0-9_]/i;
++    const k = e.matches.filter(m => {
++      const x = (m.item && m.item.str) || '';
++      return x.slice(m.charStart, m.charEnd).toUpperCase() === T && !W.test(x.charAt(m.charStart - 1) || '') && !W.test(x.charAt(m.charEnd) || '');
++    });
++    if (k.length === e.matches.length) return;
++    if (dupClique && !k.length) return;
++    e.matches = k;
++    e.matchGroups = [];
++    e.matchesByPage = new Map();
++    for (const o of k) {
++      let g = e.matchesByPage.get(o.pageIndex);
++      if (!g) { g = []; e.matchesByPage.set(o.pageIndex, g); }
++      g.push(o);
++    }
++    e.activeGroupIndex = -1;
++    if (k.length) {
++      const a = e.currentPage - 1;
++      let o = 0, l = Infinity;
++      for (let c = 0; c < k.length; c++) {
++        const h = Math.abs(k[c].pageIndex - a);
++        if (h < l) { l = h; o = c; if (h === 0) break; }
++      }
++      e.activeMatchIndex = o;
++      e.currentPage = k[o].pageIndex + 1;
++    } else e.activeMatchIndex = -1;
++    this._rebuildActiveIndicesCache(e);
++    this.notify();
++  }
++
+   private _rebuildActiveIndicesCache(d: PdfDocument) {
+     if (d.matchGroups.length > 0 && d.activeGroupIndex >= 0) {
+       d.activeMatchIndicesCache = new Set(d.matchGroups[d.activeGroupIndex]);
+@@ -2315,6 +2355,7 @@ class PdfStore extends Emitter {
+ }
+ 
+ export const pdfStore = new PdfStore();
++(window as unknown as { __2rMe?: unknown }).__2rMe = pdfStore;
+ 
+ // Expose for integration tests (Playwright) — DEV builds only
+ if (typeof window !== 'undefined' && import.meta.env.DEV) {
+-- 
+2.43.0
+

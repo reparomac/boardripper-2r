@@ -1,0 +1,296 @@
+From 685a37ceefee950f1886c4996dd91e2e0865317e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:34:46 -0300
+Subject: [PATCH 11/22] 2R port p13 BoardRenderer parte 1
+
+---
+ src/frontend/src/renderer/BoardRenderer.ts | 136 ++++++++++++++++++---
+ src/frontend/src/renderer/smooth-zoom.ts   |   2 +-
+ 2 files changed, 118 insertions(+), 20 deletions(-)
+
+diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
+index 672093dc..e4b3f95f 100644
+--- a/src/frontend/src/renderer/BoardRenderer.ts
++++ b/src/frontend/src/renderer/BoardRenderer.ts
+@@ -74,6 +74,8 @@ import { obdNetIndex, obdBoardNumberFor, obdStore } from '../store/obd-store';
+ import { primaryDiodeReading, boardHasDiodeData, formatDiode } from '../store/diode-readings';
+ import { stepExpApproach, ZOOM_TWEEN_RATE } from './smooth-zoom';
+ import { isPinsOnTop, subscribeCameraOverlay } from '../store/camera-overlay';
++import { r2PadsColoridos, r2Mesa } from '../r2/hand-flags';
++import { R2mira } from '../r2/hand-geom';
+ 
+ // Alias for local use — all colour references go through board-scene.ts
+ const COLORS = BOARD_COLORS;
+@@ -364,20 +366,33 @@ function trackpadSpeed(): { pan: number; zoom: number } {
+ /** 2R: aparelho de apontar (Roger, 11/10/2026: «adequar para mouse e trackpad no Windows»).
+  *  'auto' = descobre pelo jeito do giro (roda de mouse dá saltos; trackpad desliza),
+  *  'mouse' = roda sempre amplia/reduz, 'trackpad' = dois dedos sempre arrastam. */
+-function pointerMode(): 'auto' | 'mouse' | 'trackpad' {
++/* 2R 20/10/2026: 'flexbv' (padrão) — dois dedos para baixo aumenta e para cima diminui; roda do mouse para cima aumenta */
++function pointerMode(): 'auto' | 'mouse' | 'trackpad' | 'flexbv' {
+   try {
+     const v = localStorage.getItem('2r-pointer-mode');
+-    return v === 'mouse' || v === 'trackpad' ? v : 'auto';
++    return v === 'mouse' || v === 'trackpad' || v === 'auto' ? v : 'flexbv';
+   } catch { return 'auto'; }
+ }
+ /** 2R: inverter a roda do mouse / os dois dedos (Roger: «padrão Win / padrão Mac»). */
+ function invertFlag(k: '2r-mouse-invert' | '2r-pan-invert'): number {
+   try { return localStorage.getItem(k) === '1' ? -1 : 1; } catch { return 1; }
+ }
++/* 2R 27/10/2026 (Roger: «consegue aumentar a velocidade do scroll? ainda sinto que dá uma garrada»): roda do mouse 1,6×
++   por padrão (chave nova «2r-mouse-zoom2») e até 5× */
+ function mouseZoomSpeed(): number {
+-  try { const n = parseFloat(localStorage.getItem('2r-mouse-zoom') || '1'); return isFinite(n) && n > 0 ? n : 1; }
+-  catch { return 1; }
++  try { const n = parseFloat(localStorage.getItem('2r-mouse-zoom2') || '1.6'); return isFinite(n) && n > 0 ? n : 1.6; }
++  catch { return 1.6; }
+ }
++/* eslint-disable @typescript-eslint/no-explicit-any */
++const r2w = window as any;
++/** 2R 22/10/2026: roda do MOUSE (wheelDeltaY múltiplo de 120, sem giro lateral, sem trackpad nos últimos 400 ms) */
++function r2RodaDoMouse(e: WheelEvent): boolean {
++  const w = (e as any).wheelDeltaY as number | undefined, ag = performance.now();
++  const tp = e.deltaX !== 0 || (w !== undefined && w !== 0 ? w % 120 !== 0 && (e.deltaY % 1 !== 0 || w === -3 * e.deltaY) : e.deltaY % 1 !== 0);
++  if (tp) r2w.__r2tpT = ag;
++  return !tp && ag - (r2w.__r2tpT || 0) >= 400 && w !== undefined && w !== 0 && w % 120 === 0;
++}
++function r2RodaK(e: WheelEvent): number { return r2w.__r2RodaK ? r2w.__r2RodaK(e) : 1; }
+ 
+ /** 2R: trackpad direto (padrão ligado; Preferências › Uso › Trackpad). */
+ function trackpadDirect(): boolean {
+@@ -1096,7 +1111,13 @@ export class BoardRenderer {
+   }
+ 
+   /** Shared ticker callback — used by both init() and reinitApp(). */
++  private __r2pv: unknown; private __r2vv: unknown;
+   private onTick = (ticker: import('pixi.js').Ticker) => {
++    // 2R 27/10/2026: valores/encapsulamentos lidos do esquema chegaram → redesenha (cards de valor, tamanho físico)
++    if (r2w.__r2PacoteVer !== this.__r2pv || r2w.__r2Valores !== this.__r2vv) {
++      this.__r2pv = r2w.__r2PacoteVer; this.__r2vv = r2w.__r2Valores;
++      if (this.board) this.scheduleRebuild();
++    }
+     const perf = this.perfVisible;
+     const frameStart = perf ? performance.now() : 0;
+ 
+@@ -1162,8 +1183,9 @@ export class BoardRenderer {
+         // — só o zoom do técnico (não os pulos animados); desliga em Preferências.
+         const newScale = Math.abs(vp.scale.x);
+         if (!animMoved && !this.programmaticMove && this.viewPoseScale > 0 && newScale !== this.viewPoseScale) {
+-          let on = true;
+-          try { on = localStorage.getItem('2r-sync-zoom') !== '0'; } catch { /* */ }
++          // 2R 13/10/2026: zoom da placa e do PDF independentes (Roger) — liga com «2r-sync-zoom»="1"
++          let on = false;
++          try { on = localStorage.getItem('2r-sync-zoom') === '1'; } catch { on = false; }
+           if (on) window.dispatchEvent(new CustomEvent('2r-bv-zoom', { detail: { ratio: newScale / this.viewPoseScale } }));
+         }
+         this.viewPoseScale = newScale;
+@@ -2219,6 +2241,21 @@ export class BoardRenderer {
+ 
+     this.boundContextMenu = (e: MouseEvent) => {
+       e.preventDefault();
++      // 2R 24/10/2026 21h55 (Roger: «quando clicar com o botão direito no componente, linkar no PDF e vice-versa»):
++      // botão direito (ou dois dedos) no componente = mostra no PDF; Shift + botão direito abre o menu de antes
++      if (!e.shiftKey && this.board && r2w.__r2DireitoMenu !== true) {
++        const R = this.containerEl.getBoundingClientRect();
++        const W = this.viewport.toWorld(e.clientX - R.left, e.clientY - R.top);
++        const H = this.hitTest(W);
++        if (H && H.partIndex != null) {
++          const P = this.board.parts[H.partIndex];
++          if (P) {
++            try { boardStore.selectPart(H.partIndex); } catch { /* */ }
++            this.triggerFollowPdf(P, true);
++            return;
++          }
++        }
++      }
+       this.handleRightClick(e);
+     };
+     this.containerEl.addEventListener('contextmenu', this.boundContextMenu);
+@@ -2298,7 +2335,8 @@ export class BoardRenderer {
+     this.tooltipWorklistNetSpan = document.createElement('span');
+     this.tooltipWorklistNetSpan.className = 'pnt-worklist-net';
+     this.tooltipWorklistNetSpan.style.display = 'none';
+-    this.tooltipEl.append(this.tooltipNetSpan, this.tooltipDetailSpan, this.tooltipCompareSpan, this.tooltipWorklistSpan, this.tooltipMetaSpan, this.tooltipWorklistNetSpan, this.tooltipObdSpan);
++    // 2R: a leitura OBD logo abaixo do nome (antes vinha por último)
++    this.tooltipEl.append(this.tooltipNetSpan, this.tooltipDetailSpan, this.tooltipObdSpan, this.tooltipCompareSpan, this.tooltipWorklistSpan, this.tooltipMetaSpan, this.tooltipWorklistNetSpan);
+     this.containerEl.appendChild(this.tooltipEl);
+     this.tooltipCanvas = this.app.renderer.canvas as HTMLCanvasElement;
+     // Coalesce to one handleHover() per animation frame — pointermove can fire
+@@ -4552,6 +4590,13 @@ export class BoardRenderer {
+       nets.add(pin.net);
+       if (nets.size >= 4) break; // limit to 4 distinctive nets
+     }
++    // 2R: componente só com nets de alimentação → usa as 2 primeiras que não são terra
++    if (nets.size === 0) {
++      for (const pin of part.pins) {
++        const u = (pin.net || '').toUpperCase();
++        if (u && u !== '(NULL)' && u !== 'GND' && u !== 'VSS') { nets.add(pin.net); if (nets.size >= 2) break; }
++      }
++    }
+ 
+     // Pin names as extra disambiguating context (printed on the symbol body).
+     // Keep only distinctive alphanumeric ball names (e.g. "A1"); drop purely
+@@ -4628,6 +4673,8 @@ export class BoardRenderer {
+   /** Schedule a debounced follow-PDF lookup after viewport movement settles. */
+   private scheduleFollowDebounce(): void {
+     if (!boardStore.followPdf) return;
++    // 2R 12/10/2026: «PDF acompanha» só quando o técnico ligou de propósito (localStorage «2r-follow-pdf-on»)
++    if ((() => { try { return localStorage.getItem('2r-follow-pdf-on') !== '1'; } catch { return true; } })()) return;
+     if (this.followDebounceTimer) clearTimeout(this.followDebounceTimer);
+     this.followDebounceTimer = setTimeout(() => {
+       this.followDebounceTimer = null;
+@@ -4674,7 +4721,34 @@ export class BoardRenderer {
+         trackpadPinch: true,
+         wheelZoom: !s.twoFingerPan,  // disable scroll-to-zoom in two-finger-pan mode
+       })
+-      .clampZoom({ minScale: 0.001, maxScale: 10 });
++      .clampZoom({ minScale: 0.001, maxScale: 400 });
++    // 2R: o app e o index.html usam o viewport e o renderer (zoom mínimo/máximo do RastreCurve, foto, cruz)
++    r2w.__2rVP = this.viewport;
++    r2w.__2rRend = this;
++    R2mira(this.containerEl);
++    if (!r2w.__2rClampLoop) {
++      r2w.__2rClampLoop = 1;
++      (function L() {
++        try {
++          const v = r2w.__2rVP, m = r2w.__2rMinZoom, M = r2w.__2rMaxZoom;
++          if (v && v.scale) {
++            const x = Math.abs(v.scale.x);
++            if (m && x < m * 0.999) v.setZoom(m, true);
++            else if (M && x > M * 1.001) v.setZoom(M, true);
++          }
++        } catch { /* */ }
++        requestAnimationFrame(L);
++      })();
++    }
++    if (!(this.viewport as any).__rcHook) {
++      (this.viewport as any).__rcHook = 1;
++      this.viewport.on('zoomed', () => {
++        const m = r2w.__2rMinZoom, v = this.viewport;
++        if (m && v.scale.x < m) v.setZoom(m, true);
++        const M = r2w.__2rMaxZoom;
++        if (M && v.scale.x > M) v.setZoom(M, true);
++      });
++    }
+     if (!s.disableInertia) {
+       this.viewport.decelerate({ friction: 0.95 });
+     }
+@@ -4743,10 +4817,16 @@ export class BoardRenderer {
+         const sp = trackpadSpeed();
+         const pm = pointerMode();
+         const isMouse = !e.ctrlKey && (pm === 'mouse' || (pm === 'auto' && looksLikeMouseWheel(e)));
+-        if (isMouse) {
++        if (!e.ctrlKey && pm === 'flexbv') {
++          // 2R 20/10/2026 (FlexBV): roda e dois dedos dão zoom; arrastar com o clique move a placa
++          const roda = e.deltaMode === 1 || (Math.abs(e.deltaY) >= 50 && e.deltaY % 1 === 0);
++          this.zoomAtScreen(e.offsetX, e.offsetY, e.deltaY * r2RodaK(e), true,
++            WHEEL_DIVISOR / (roda ? mouseZoomSpeed() : parseFloat(localStorage.getItem('2r-flex-tp-zoom') || '8') || 8));
++        } else if (isMouse) {
+           // roda do mouse: amplia/reduz em volta do ponteiro (padrão do Windows e do FlexBV)
+-          this.zoomAtScreen(e.offsetX, e.offsetY, (e.deltaY || e.deltaX) * invertFlag('2r-mouse-invert'), true, WHEEL_DIVISOR / mouseZoomSpeed());
++          this.zoomAtScreen(e.offsetX, e.offsetY, (e.deltaY || e.deltaX) * r2RodaK(e), true, WHEEL_DIVISOR / mouseZoomSpeed());
+         } else if (e.ctrlKey) {
++          if (pm === 'flexbv') { e.preventDefault(); e.stopPropagation(); return; }
+           const f = Math.exp(-Math.max(-60, Math.min(60, e.deltaY)) * 0.011 * sp.zoom);
+           this.setScaleAtScreen(e.offsetX, e.offsetY, this.viewport.scale.x * f);
+         } else if (renderSettingsStore.settings.twoFingerPan && e.deltaMode === 0) {
+@@ -4771,7 +4851,8 @@ export class BoardRenderer {
+         action = s.wheelMetaAction;
+       } else if (e.shiftKey) {
+         action = s.wheelShiftAction;
+-      } else if (s.wheelDetection && s.twoFingerPan && looksLikeMouseWheel(e)) {
++      } else if (s.twoFingerPan && (r2RodaDoMouse(e) || (s.wheelDetection && looksLikeMouseWheel(e)))) {
++        // 2R 22/10/2026 (Roger): roda do MOUSE dá zoom na placa (Mac e Windows); trackpad continua movendo
+         // Safety net: a classic mouse wheel in pan mode would pan jerkily —
+         // route it to the mouse-centred zoom path instead.
+         action = 'zoom';
+@@ -4785,7 +4866,7 @@ export class BoardRenderer {
+       }
+ 
+       if (action === 'zoom') {
+-        this.zoomAtScreen(e.offsetX, e.offsetY, e.deltaY || e.deltaX, true, WHEEL_DIVISOR);
++        this.zoomAtScreen(e.offsetX, e.offsetY, (e.deltaY || e.deltaX) * r2RodaK(e), true, WHEEL_DIVISOR);
+       } else {
+         this.viewport.x -= e.deltaX;
+         this.viewport.y -= e.deltaY;
+@@ -4807,8 +4888,27 @@ export class BoardRenderer {
+    *  not route through a delta, because that is exactly the accumulation the
+    *  plugin's formula got wrong. Screen coordinates are container CSS px, the
+    *  same space `viewport.toWorld` works in here. */
++  /** 2R 12/10/2026: afasta no máximo até a placa ocupar metade da área e aproxima no máximo até um pad */
++  private __r2B: unknown = null; private __r2Pad = 50;
++  private r2Clamp(n: number): number { const L = this.r2Lim(); return Math.max(L[0], Math.min(L[1], n)); }
++  private r2Lim(): [number, number] {
++    const B = this.board;
++    if (!B || !B.bounds || !this.containerEl) return [0.001, 10];
++    const W = this.containerEl.clientWidth || 1, H = this.containerEl.clientHeight || 1, b = B.bounds;
++    const bw = Math.max(1, b.maxX - b.minX) * (boardStore.butterfly ? 2 : 1), bh = Math.max(1, b.maxY - b.minY);
++    if (this.__r2B !== B) {
++      this.__r2B = B;
++      const rs: number[] = [];
++      for (const p of B.parts || []) for (const q of p.pins || []) if (q && q.radius > 0) rs.push(q.radius);
++      rs.sort((x, y) => x - y);
++      this.__r2Pad = rs.length ? rs[rs.length >> 1] * 2 : 50;
++    }
++    const mn = 0.5 * Math.min(W / bw, H / bh), mx = Math.min(W, H) / Math.max(0.001, this.__r2Pad);
++    return [Math.max(0.001, Math.min(mn, mx)), Math.max(mn, mx)];
++  }
++
+   private setScaleAtScreen(screenX: number, screenY: number, targetScale: number): void {
+-    const s = Math.max(0.001, Math.min(10, targetScale));
++    const s = this.r2Clamp(targetScale);
+     const before = this.viewport.toWorld(screenX, screenY);
+     this.viewport.scale.set(s, s);
+     const after = this.viewport.toWorld(screenX, screenY);
+@@ -5043,11 +5143,12 @@ export class BoardRenderer {
+    *  pointer 1:1, not lag behind an animated approach. */
+   private zoomAtScreen(screenX: number, screenY: number, rawDelta: number, smooth = false, divisor = 500): void {
+     const factor = Math.pow(2, (1 + 0.3) * (-rawDelta / divisor));
++    if (r2w.__r2ZA) r2w.__r2ZA.v *= factor;
+     if (smooth && renderSettingsStore.settings.smoothZoom) {
+       const base = this.zoomTween?.targetScale ?? Math.abs(this.viewport.scale.x);
+       const world = this.viewport.toWorld(screenX, screenY);
+       this.zoomTween = {
+-        targetScale: Math.max(0.001, Math.min(10, base * factor)),
++        targetScale: this.r2Clamp(base * factor),
+         anchorScreenX: screenX, anchorScreenY: screenY,
+         anchorWorldX: world.x, anchorWorldY: world.y,
+       };
+@@ -5056,10 +5157,7 @@ export class BoardRenderer {
+       return;
+     }
+     const before = this.viewport.toWorld(screenX, screenY);
+-    this.viewport.scale.set(
+-      Math.max(0.001, Math.min(10, this.viewport.scale.x * factor)),
+-      Math.max(0.001, Math.min(10, this.viewport.scale.y * factor)),
+-    );
++    this.viewport.scale.set(this.r2Clamp(this.viewport.scale.x * factor), this.r2Clamp(this.viewport.scale.y * factor));
+     const after = this.viewport.toWorld(screenX, screenY);
+     this.viewport.x += (after.x - before.x) * this.viewport.scale.x;
+     this.viewport.y += (after.y - before.y) * this.viewport.scale.y;
+@@ -5338,7 +5436,7 @@ export class BoardRenderer {
+   private onThemeUpdate(): void {
+     const board = themeStore.activeTheme().board;
+     if (this.app && this.app.renderer) {
+-      this.app.renderer.background.color = hexToInt(board.canvasBackground);
++      this.app.renderer.background.color = hexToInt(r2Mesa(board.canvasBackground));
+       this.applyBackgroundAlpha();
+     }
+     // A theme change alters BOARD_COLORS (outline / selection / pin+net+part
+diff --git a/src/frontend/src/renderer/smooth-zoom.ts b/src/frontend/src/renderer/smooth-zoom.ts
+index bc34fabb..7725702f 100644
+--- a/src/frontend/src/renderer/smooth-zoom.ts
++++ b/src/frontend/src/renderer/smooth-zoom.ts
+@@ -4,7 +4,7 @@
+  *  time constant (~63% converged); ~90% converged at ≈ 128 ms — tuned for a
+  *  fluid, quickly-settling camera feel. */
+ 
+-export const ZOOM_TWEEN_RATE = 18;
++export const ZOOM_TWEEN_RATE = 40; // 2R 27/10/2026: zoom mais rápido (Roger: «ainda sinto que dá uma garrada»)
+ 
+ export function stepExpApproach(current: number, target: number, dtMs: number, rate: number): number {
+   const delta = target - current;
+-- 
+2.43.0
+

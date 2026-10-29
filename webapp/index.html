@@ -2,6 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- 2R 28/10/2026 (Roger: tela branca piscando ao abrir): fundo escuro antes de o CSS/JS carregarem; o CSS do app sobrepõe depois -->
+    <style id="r2-fundo">html,body{background:#0e0f11}</style>
     <link rel="icon" type="image/svg+xml" href="./logo.svg" />
     <!-- iOS ignores SVG manifest icons: without this, "Add to Home Screen"
          gets a page screenshot. Installing is also what exempts the site from
@@ -14,8 +16,8 @@
     <title>BoardRipper</title>
     <!-- 2R 24/10/2026: contornos reais de placas parecidas (placas cujo arquivo traz só o retângulo) -->
     <script src="./r2-contornos.js"></script>
-    <script type="module" crossorigin src="./assets/index-BscvDDFO.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-I3MT3-ur.css">
+    <script type="module" crossorigin src="./assets/index-2vnmpMrS.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-lXX34mum.css">
   <style>/* BDV só do servidor (Roger, 26/10/2026): sem a aba «Local» (biblioteca deste computador) */
 .r2-acvseg{display:none!important}
 .activity-rail-item[data-sidebar-tab="library"]{display:none!important}
@@ -162,6 +164,25 @@ window.__r2Esp = function (d, st) {
       })();
     </script>
   
+    <!-- 2R 28/10/2026 22h09 (Roger: «faz uma animação quando clicar no OBD, pra saber se sincronizou e terminou a busca ou a
+         atualização»): girando enquanto busca; no fim um selo no ícone — verde ✓ (dados lidos), âmbar – (placa sem dados no
+         OpenBoardData) ou vermelho ✕ (falhou) — por 4 s, junto com o aviso de sempre. -->
+    <style>
+      @keyframes r2obdGira { to { transform: rotate(360deg); } }
+      @keyframes r2obdPulso { 0% { transform: scale(.4); opacity: 0; } 60% { transform: scale(1.25); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+      [id="2r-obd-btn"] { position: relative; }
+      [id="2r-obd-btn"].r2obd-busy svg { animation: r2obdGira .9s linear infinite; transform-origin: 50% 50%; }
+      [id="2r-obd-btn"].r2obd-busy { color: #D9A441 !important; }
+      [id="2r-obd-btn"] .r2obd-selo { position: absolute; top: 2px; right: 6px; width: 16px; height: 16px; border-radius: 50%; display: none;
+          align-items: center; justify-content: center; font: 800 11px/1 -apple-system,"Segoe UI",sans-serif; color: #111; pointer-events: none;
+          box-shadow: 0 0 8px currentColor; animation: r2obdPulso .45s ease-out both; }
+      [id="2r-obd-btn"].r2obd-ok { color: #3DDC84 !important; }
+      [id="2r-obd-btn"].r2obd-ok .r2obd-selo { display: flex; background: #3DDC84; }
+      [id="2r-obd-btn"].r2obd-vazio { color: #E0A33A !important; }
+      [id="2r-obd-btn"].r2obd-vazio .r2obd-selo { display: flex; background: #E0A33A; }
+      [id="2r-obd-btn"].r2obd-erro { color: #E5484D !important; }
+      [id="2r-obd-btn"].r2obd-erro .r2obd-selo { display: flex; background: #E5484D; color: #fff; }
+    </style>
     <!-- 2R Tools (15/10/2026): ícone "OBD" — força a busca/leitura dos dados OpenBoardData (diodo, tensão,
          resistência) da placa aberta. Usa o próprio armazém do BoardRipper (window.__obdStore). -->
     <script>
@@ -180,12 +201,14 @@ window.__r2Esp = function (d, st) {
           var S = window.__obdStore;
           if (!S) { toast('OBD indisponível nesta versão.'); return; }
           if (btn._busy) return; btn._busy = true; btn.style.color = '#D9A441';
+          var fim = 'erro';
+          clearTimeout(btn._selo); btn.classList.remove('r2obd-ok', 'r2obd-vazio', 'r2obd-erro'); btn.classList.add('r2obd-busy');
           try {
             toast('OBD: buscando dados da placa…');
             try { await S.refreshStatus(); } catch (e) {}
             if (!S._index || !S._index.synced) { toast('OBD: baixando o índice de placas…'); await S.syncIndex(); }
             var bns = Array.from(S._matchesByBn ? S._matchesByBn.keys() : []).filter(Boolean);
-            if (!bns.length) { toast('OBD: abra uma placa primeiro (número da placa não identificado).'); return; }
+            if (!bns.length) { fim = 'vazio'; toast('OBD: abra uma placa primeiro (número da placa não identificado).'); return; }
             var variants = 0, got = 0;
             for (var i = 0; i < bns.length; i++) {
               S._matchesByBn.delete(bns[i]);
@@ -198,10 +221,18 @@ window.__r2Esp = function (d, st) {
               }
             }
             if (S._bump) S._bump();
+            fim = got ? 'ok' : 'vazio';
             toast(variants ? ('OBD: ' + got + ' de ' + variants + ' variante(s) lidas.') : 'OBD: nenhum dado encontrado para esta placa.');
           } catch (e) {
             toast('OBD: falhou (' + (e && e.message ? e.message : e) + ').');
-          } finally { btn._busy = false; btn.style.color = ''; }
+          } finally {
+            btn._busy = false; btn.style.color = '';
+            btn.classList.remove('r2obd-busy');
+            var sl = btn.querySelector('.r2obd-selo');
+            if (sl) { sl.textContent = fim === 'ok' ? '✓' : (fim === 'vazio' ? '–' : '✕'); sl.style.animation = 'none'; void sl.offsetWidth; sl.style.animation = ''; }
+            btn.classList.add('r2obd-' + fim);
+            btn._selo = setTimeout(function () { btn.classList.remove('r2obd-ok', 'r2obd-vazio', 'r2obd-erro'); }, 4000);
+          }
         }
         function mk() {
           if (document.getElementById('2r-obd-btn') || !document.body) return;
@@ -214,6 +245,7 @@ window.__r2Esp = function (d, st) {
           // 20/10/2026 (Roger): «o ícone OBD precisa alinhar junto com os outros» — agora vai dentro da barra, logo abaixo do último ícone
           b.addEventListener('mouseenter', function () { if (!b._busy) b.style.color = ''; });
           b.addEventListener('mouseleave', function () { if (!b._busy) b.style.color = ''; });
+          var selo = document.createElement('span'); selo.className = 'r2obd-selo'; b.appendChild(selo);
           b.addEventListener('click', function () { force(b); });
           function place() {
             var rail = document.querySelector('.activity-rail');
@@ -1996,8 +2028,8 @@ window.__r2Esp = function (d, st) {
     <style>
       /* 27/10/2026 (Roger: «o botão top e bottom está em cima de outro ícone, faltou add o butterfly»): sai de cima do botão do painel lateral (canto direito, 46 px) e ganha o BUTTERFLY */
       #r2tb { position:absolute; top:7px; right:56px; z-index:30; display:flex; gap:8px; font:800 12px Inter,-apple-system,"Segoe UI",sans-serif; letter-spacing:.08em; }
-      #r2tb button { background:rgba(20,21,24,.9); color:#9aa0a8; border:2px solid var(--c); border-radius:8px; padding:5px 12px; cursor:pointer;
-                     opacity:.55; transition:box-shadow .15s, opacity .15s, color .15s; font:inherit; }
+      #r2tb button { background:rgba(20,21,24,.9); color:var(--c); border:2px solid var(--c); border-radius:8px; padding:5px 12px; cursor:pointer;
+                     opacity:.6; transition:box-shadow .15s, opacity .15s, color .15s; font:inherit; } /* 28/10: texto na cor do lado também quando apagado */
       #r2tb button.on { opacity:1; color:var(--c); box-shadow:0 0 6px var(--c), 0 0 14px var(--c), inset 0 0 6px var(--c); text-shadow:0 0 6px var(--c); }
       #r2tb button:hover { opacity:1; }
       /* 27/10/2026 (Roger: «subir o mapa o máximo para cima, alinhado com os outros botões»): mapa no topo, na mesma altura da busca e do TOP/BOTTOM/BUTTERFLY */
@@ -2019,11 +2051,15 @@ window.__r2Esp = function (d, st) {
         function U() { return window.__2rBoardGet && window.__2rBoardGet(); }
         function cont() { var R = window.__2rRend; return R && R.containerEl && R.containerEl.isConnected ? R.containerEl : null; }
         function cores() {
-          var top = '#D4B26A', bot = '#5FB4FF';
+          // 28/10/2026 22h03 (Roger: «no botão top e bottom, mantém as cores dos botões com as cores correspondentes com as
+          // nets (amarelo e azul)»): as mesmas cores das linhas da net — TOP amarelo (netLineColor, padrão #FFD600) e
+          // BOTTOM azul-claro (#3FC3F7, cor do trecho do outro lado)
+          var top = '#FFD600', bot = '#3FC3F7';
           try {
             var st = JSON.parse(localStorage.getItem('boardripper-render-settings') || '{}');
-            var t = st.defaultPinColorTop, b = st.defaultPinColorBottom;
-            if (t && b && String(t).toLowerCase() !== String(b).toLowerCase()) { top = t; bot = b; }
+            var n = st.netLineColor;
+            if (typeof n === 'number' && isFinite(n)) top = '#' + ('000000' + n.toString(16)).slice(-6);
+            else if (typeof n === 'string' && /^#?[0-9a-f]{6}$/i.test(n)) top = n.charAt(0) === '#' ? n : '#' + n;
           } catch (e) {}
           return { top: top, bot: bot };
         }

@@ -1,0 +1,241 @@
+From 808f7f85ff92ad9390f0dfb98508f9929534fb1b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:33:09 -0300
+Subject: [PATCH 10/22] 2R port p12 label overlay
+
+---
+ src/frontend/src/r2/hand-labels.ts         | 105 +++++++++++++++++++++
+ src/frontend/src/renderer/label-overlay.ts |  71 ++++++++++++--
+ 2 files changed, 169 insertions(+), 7 deletions(-)
+ create mode 100644 src/frontend/src/r2/hand-labels.ts
+
+diff --git a/src/frontend/src/r2/hand-labels.ts b/src/frontend/src/r2/hand-labels.ts
+new file mode 100644
+index 00000000..cd77d269
+--- /dev/null
++++ b/src/frontend/src/r2/hand-labels.ts
+@@ -0,0 +1,105 @@
++// @ts-nocheck
++/* eslint-disable */
++// 2R Tools — etiquetas da placa (cards do diodo, nome+valor dentro do componente, giro 90°). Portado VERBATIM do bundle 0.48.0
++// editado à mão (20/10 a 27/10/2026). Usado por renderer/label-overlay.ts.
++import { boardStore as U } from '../store/board-store';
++const R2NET = { circleNet: 1, pinNet: 1, twoPinNet: 1 };
++/*2R 27/10/2026 (Roger: «componentes de tamanho 0201, precisa diminuir a fonte do valor do componente, está truncado» / «tem vários componentes que estão cortados»): o valor do componente encolhe até caber na largura do corpo do componente na tela, e nome + valor ficam centralizados juntos dentro dele; window.__r2ValorFitOff=true volta ao antigo*/ /*2R 27/10/2026 (Roger: «nesses casos, pode girar o card e os textos em 90 graus, para manter o padrão» / «o card está cobrindo os textos»): componente de 2 pinos em pé (mais alto que largo na tela) → nome, valor e tensão giram 90°; o card de leitura do pino gira junto e vai para fora do corpo, ao lado do pino*/ let R2rs = 0,
++  R2dv = null;
++function R2vertBox(b, m) {
++  try {
++    if (window.__r2Gira90Off) return null;
++    const P = U.activeTab?.board?.parts?.[b.partIndex],
++      B = P && P.__r2box;
++    if (!B || !P.pins || P.pins.length !== 2) return null;
++    const c = [
++        [B.x, B.y],
++        [B.x + B.w, B.y],
++        [B.x, B.y + B.h],
++        [B.x + B.w, B.y + B.h],
++      ].map((v) => [m.a * v[0] + m.c * v[1] + m.tx, m.b * v[0] + m.d * v[1] + m.ty]),
++      X = c.map((v) => v[0]),
++      Y = c.map((v) => v[1]),
++      x0 = Math.min(...X),
++      x1 = Math.max(...X),
++      y0 = Math.min(...Y),
++      y1 = Math.max(...Y);
++    return {
++      x0,
++      x1,
++      y0,
++      y1,
++      vert: x1 - x0 > (y1 - y0) * 1.25,
++      alto: y1 - y0 > (x1 - x0) * 1.25,
++    }; /*27/10 (Roger: «era pra ser só os componentes que estavam na horizontal, então o card teria de ser na vertical»): deitado (mais largo que alto) → card em pé*/
++  } catch {
++    return null;
++  }
++}
++let R2vf = null;
++function R2valFit(r, b, m, N, G) {
++  try {
++    if (window.__r2ValorFitOff) return null;
++    const v = window.__r2Valores && window.__r2Valores[b.text],
++      pz = v ? String(v).split(" ") : [],
++      tx = pz[0] || "",
++      /*27/10/2026 (Roger: «nos capacitores, add a tensão também»): capacitor ganha uma 3ª linha com a tensão (ex.: 12PF / 25V)*/ tv =
++        /^C/i.test(b.text) && pz[1] && /V$/i.test(pz[1]) ? pz[1] : "";
++    const P = U.activeTab?.board?.parts?.[b.partIndex],
++      B = P && P.__r2box;
++    let wS = 1 / 0,
++      hS = 1 / 0;
++    B &&
++      B.w > 0 &&
++      B.h > 0 &&
++      ((wS = Math.abs(m.a) * B.w + Math.abs(m.c) * B.h), (hS = Math.abs(m.b) * B.w + Math.abs(m.d) * B.h));
++    /*Roger escolheu: só o card na vertical; os textos ficam deitados (window.__r2GiraTexto=true gira os textos também)*/ /*27/10: componente deitado de 2 pinos → os cards ficam em cima dos pads; nome, valor e tensão usam só o meio do corpo (entre os pads) e encolhem para caber*/ if (
++      !window.__r2Gira90Off &&
++      P &&
++      P.pins &&
++      P.pins.length === 2 &&
++      wS < 1 / 0 &&
++      wS > hS * 1.25
++    )
++      wS *= 0.5;
++    if (!window.__r2Gira90Off && P && P.pins && P.pins.length === 2 && hS < 1 / 0 && hS > wS * 1.25) hS *= 0.5;
++    const rot =
++      window.__r2GiraTexto === !0 && !window.__r2Gira90Off && P && P.pins && P.pins.length === 2 && hS > wS * 1.25;
++    if (rot) {
++      const t = wS;
++      wS = hS;
++      hS = t;
++    }
++    if (!(wS < 1 / 0)) return tx ? { tx, tv, nv: N, nn: N, dy: -(N * 0.5 + N * 0.6 + (tv ? N * 1.1 : 0)) / 2 } : null;
++    let nn = N;
++    G > wS * 0.92 && (nn = (N * wS * 0.92) / G);
++    if (!tx) {
++      nn = Math.min(nn, hS * 0.85);
++      return nn < N || rot ? { tx: "", tv: "", rot, nv: 0, nn: Math.max(3, Math.round(nn * 10) / 10), dy: 0 } : null;
++    }
++    const f0 = r.font;
++    r.font = `700 ${N}px "Source Sans 3",Arial,sans-serif`;
++    const Gv = Math.max(r.measureText(tx).width, tv ? r.measureText(tv).width : 0) || 1;
++    r.font = f0;
++    let nv = N;
++    Gv > wS * 0.9 && (nv = (N * wS * 0.9) / Gv);
++    nv = Math.min(nv, nn);
++    const alt = () => nn + nv * 1.2 + (tv ? nv * 1.1 : 0);
++    if (alt() > hS * 1.1) {
++      const k = Math.max(0.45, (hS * 1.1) / alt());
++      nv *= k;
++      nn *= k;
++    }
++    const dy = -(nn * 0.5 + nv * 0.6 + (tv ? nv * 1.1 : 0)) / 2;
++    return { tx, tv, rot, nv: nv >= 3 ? Math.round(nv * 10) / 10 : 0, nn: Math.max(3, Math.round(nn * 10) / 10), dy };
++  } catch {
++    return null;
++  }
++}
++function R2plaq(r, x, y, w, h, k) {
++  ((r.fillStyle = "rgba(150,150,150,0.92)"),
++    r.beginPath(),
++    r.roundRect ? r.roundRect(x, y, w, h, k) : r.rect(x, y, w, h),
++    r.fill());
++}
++export { R2NET, R2vertBox, R2valFit, R2plaq };
+diff --git a/src/frontend/src/renderer/label-overlay.ts b/src/frontend/src/renderer/label-overlay.ts
+index c4e83fde..e271836a 100644
+--- a/src/frontend/src/renderer/label-overlay.ts
++++ b/src/frontend/src/renderer/label-overlay.ts
+@@ -7,6 +7,12 @@
+ import { haloFor, type LabelModel, type LabelRecord } from './label-model';
+ import { log } from '../store/log-store';
+ import { resizeModeStore } from '../store/resize-mode-store';
++import { R2tam, R2lado } from '../r2/hand-geom';
++import { R2NET, R2vertBox, R2valFit, R2plaq } from '../r2/hand-labels';
++/* eslint-disable @typescript-eslint/no-explicit-any */
++// 2R 20/10/2026: letra igual à do FlexBV
++const R2FONT = '"Source Sans 3","Source Sans Pro","Segoe UI",-apple-system,"Helvetica Neue",Arial,sans-serif';
++const R2NETK = R2NET as Record<string, number>;
+ 
+ export interface OverlayViewState {
+   topMatrix: { a: number; b: number; c: number; d: number; tx: number; ty: number };
+@@ -270,8 +276,14 @@ export class LabelOverlay {
+               if (px < floorPx) continue;
+             }
+           }
++          // 2R 20/10/2026: etiquetas de net menores, nome do componente 80%, card do diodo dentro/ao lado do pad
++          if (R2NETK[r.kind]) px = Math.min(px * 0.6, 11.5);
++          if (r.kind === 'part') px *= 0.8;
++          if (r.kind === 'diode') { px = R2tam(r, m, view, px * 1.05); if (px <= 0) continue; }
+           const fontPx = Math.round(px * 4) / 4;          // quantize to limit ctx.font churn
+-          if (fontPx !== lastFontPx) { ctx.font = `${fontPx}px monospace`; lastFontPx = fontPx; }
++          if (r.kind === 'diode') { ctx.font = `700 ${fontPx}px -apple-system,system-ui,"Segoe UI","Helvetica Neue",Arial,sans-serif`; lastFontPx = -1; }
++          else if (r.kind === 'part') { ctx.font = `700 ${fontPx}px ${R2FONT}`; lastFontPx = -1; }
++          else if (fontPx !== lastFontPx) { ctx.font = `${fontPx}px ${R2FONT}`; lastFontPx = fontPx; }
+           const pl = r.kind === 'circleNum' ? pinNumberPlacement(r, view, th, isSel) : r;
+           const sx0 = m.a * pl.x + m.c * pl.y + m.tx;
+           const sy0 = m.b * pl.x + m.d * pl.y + m.ty;
+@@ -281,8 +293,9 @@ export class LabelOverlay {
+           const textW = ctx.measureText(r.text).width;   // measured once — reused for bg rect
+           const aw = (0.5 - r.anchorX) * textW;
+           const ah = (0.5 - pl.anchorY) * fontPx;
+-          const sx = sx0 + aw;
+-          const sy = sy0 + ah;
++          const R2p = r.kind === 'diode' ? R2lado(r, m, view, textW, fontPx) : null;
++          const sx = R2p ? R2p[0] : sx0 + aw;
++          const sy = R2p ? R2p[1] : sy0 + ah;
+           // Diode readings are exempt from ambient dimming: a measurement
+           // you are comparing against the meter must not be translucent.
+           let alpha = pass === 'dim' && r.kind !== 'diode' ? DIM_ALPHA : 1;
+@@ -291,7 +304,32 @@ export class LabelOverlay {
+           // part's name are what the user is looking at and stay solid.
+           if (!isFocusPin && !(isSel && r.kind === 'part')) alpha *= labelFadeAlpha(px, floorPx, th.fadeRange ?? 0.5);
+           ctx.globalAlpha = alpha;
+-          if (r.bg) {                                     // backing rect (replaces the Graphics wrappers — two-pin AND circle-net)
++          // 2R 27/10/2026: componente de 2 pinos deitado/em pé → card do diodo girado e centrado no pad
++          let rs = 0;
++          const dv: any = r.kind === 'diode' ? R2vertBox(r, m) : null;
++          if (dv && dv.alto && r.px != null) {
++            ctx.save(); ctx.translate(m.a * r.px + m.c * r.py! + m.tx - sx, m.b * r.px + m.d * r.py! + m.ty - sy); rs = 1;
++          }
++          if (dv && dv.vert && !rs) {
++            ctx.save();
++            ctx.translate(
++              r.px != null ? m.a * r.px + m.c * r.py! + m.tx : sx < (dv.x0 + dv.x1) / 2 ? dv.x0 : dv.x1,
++              r.px != null ? m.b * r.px + m.d * r.py! + m.ty : sy);
++            ctx.rotate(-Math.PI / 2);
++            ctx.translate(-sx, -sy);
++            rs = 1;
++          }
++          const r2Card = r.kind === 'diode' || !!R2NETK[r.kind];
++          if (r2Card) {
++            // 2R 20/10/2026: valor de diodo em card claro com texto preto (Roger: mesmo card das etiquetas, negrito e com folga)
++            const tw = textW + fontPx * (r.kind === 'diode' ? 1.1 : 0.6);
++            if (r.kind === 'diode') {
++              ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1;
++              R2plaq(ctx, sx - tw / 2, sy - fontPx * 0.8, tw, fontPx * 1.6, Math.min(4, fontPx * 0.28));
++              ctx.fillStyle = '#F2F2F2'; ctx.fill();
++              ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
++            } else R2plaq(ctx, sx - tw / 2, sy - fontPx * 0.62, tw, fontPx * 1.24, Math.min(3, fontPx * 0.25));
++          } else if (r.bg) {                              // backing rect (replaces the Graphics wrappers — two-pin AND circle-net)
+             const tw = textW + fontPx * 0.6;
+             if (r.bgColor !== undefined) {
+               ctx.fillStyle = this.css(r.bgColor);
+@@ -310,14 +348,33 @@ export class LabelOverlay {
+             color = r.inkColor;
+             halo = haloFor(color);
+           }
+-          if (halo !== undefined) {                       // palette schemes: legible over any pad
++          // 2R: cards com texto preto; nome do componente selecionado em branco; números dos pinos claros
++          const r2Fixa = r2Card || (r.kind === 'part' && onTop) || r.kind === 'circleNum' || r.kind === 'pinNum';
++          if (halo !== undefined && !r2Fixa) {             // palette schemes: legible over any pad
+             ctx.lineJoin = 'round';
+             ctx.lineWidth = Math.min(5, Math.max(1.5, fontPx * 0.22));
+             ctx.strokeStyle = this.css(halo);
+             ctx.strokeText(r.text, sx, sy);
+           }
+-          ctx.fillStyle = this.css(color);
+-          ctx.fillText(r.text, sx, sy);
++          ctx.fillStyle = r2Card ? '#111111'
++            : r.kind === 'part' ? (onTop ? '#FFFFFF' : this.css(color))
++            : r.kind === 'circleNum' || r.kind === 'pinNum' ? '#EDEDED'
++            : this.css(color);
++          // 2R 24/10/2026 (Roger): componente NOSTUFF no esquema = ofuscado
++          const nsf = (window as any).__r2NoStuff;
++          if (r.kind === 'part' && nsf && nsf[r.text]) ctx.globalAlpha = alpha * 0.3;
++          // 2R 27/10/2026: nome + valor (+ tensão do capacitor) dentro do corpo, encolhendo para caber
++          const vf: any = r.kind === 'part' ? R2valFit(ctx, r, m, fontPx, textW) : null;
++          if (vf && vf.rot && !rs) { ctx.save(); ctx.translate(sx, sy); ctx.rotate(-Math.PI / 2); ctx.translate(-sx, -sy); rs = 1; }
++          if (vf && vf.nn < fontPx) { ctx.font = `700 ${vf.nn}px ${R2FONT}`; lastFontPx = -1; }
++          ctx.fillText(r.text, sx, sy + (vf ? vf.dy : 0));
++          if (vf && vf.nv > 0) {
++            ctx.font = `700 ${vf.nv}px ${R2FONT}`; lastFontPx = -1;
++            ctx.fillStyle = '#D5D9DF';
++            ctx.fillText(vf.tx, sx, sy + vf.dy + vf.nn * 0.5 + vf.nv * 0.6);
++            if (vf.tv) ctx.fillText(vf.tv, sx, sy + vf.dy + vf.nn * 0.5 + vf.nv * 1.7);
++          }
++          if (rs) { ctx.restore(); lastFontPx = -1; rs = 0; }
+           // Record the painted box (centered draw) for Resize Mode hit-testing.
+           // A few px of slop makes small labels easier to click.
+           if (recordBoxes) {
+-- 
+2.43.0
+

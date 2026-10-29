@@ -1,0 +1,528 @@
+From 9ed4b062f4c638d3ac3c228cfc8994844939f774 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:25:05 -0300
+Subject: [PATCH 03/22] 2R port p01-p03
+
+---
+ src/frontend/src/components/MenuBar2R.tsx    |  4 +-
+ src/frontend/src/components/Sidebar.utils.ts |  4 +-
+ src/frontend/src/main.tsx                    |  1 +
+ src/frontend/src/panels/CurvesPanel.tsx      |  2 +-
+ src/frontend/src/r2/hand-flags.ts            | 11 +++++
+ src/frontend/src/r2/hand-globals.tsx         | 37 ++++++++++++++
+ src/frontend/src/r2/loose-match.ts           | 11 +++++
+ src/frontend/src/r2/translate.ts             | 14 +++---
+ src/frontend/src/store/board-store.ts        | 40 +++++++++------
+ src/frontend/src/store/overlay-layout.ts     |  8 ++-
+ src/frontend/src/store/render-settings.ts    | 51 +++++++++++---------
+ 11 files changed, 135 insertions(+), 48 deletions(-)
+ create mode 100644 src/frontend/src/r2/hand-flags.ts
+ create mode 100644 src/frontend/src/r2/hand-globals.tsx
+
+diff --git a/src/frontend/src/components/MenuBar2R.tsx b/src/frontend/src/components/MenuBar2R.tsx
+index aadb15c5..da7a6064 100644
+--- a/src/frontend/src/components/MenuBar2R.tsx
++++ b/src/frontend/src/components/MenuBar2R.tsx
+@@ -125,7 +125,7 @@ function menus(): { name: string; items: Entry[] }[] {
+       { label: 'Mesclar imagem real com a placa', run: () => toggleCameraOverlay() },
+       ...(beta('medicoes') ? [
+         'sep' as const,
+-        { head: 'Medições (Beta)' },
++        { head: 'Medições' },
+         { label: 'Multímetro e medições (Rigol / i2C)…', run: () => showSidebarTab('meter' as never) },
+         { label: 'Mapear componente (sequência dos pinos)…', run: () => showSidebarTab('meter' as never) },
+         { label: 'Próximo pino da sequência', key: ']', run: () => { stepPin(1); } },
+@@ -133,7 +133,7 @@ function menus(): { name: string; items: Entry[] }[] {
+       ] : []),
+       ...((beta('teleguiado') || beta('curvas')) ? ['sep' as const, { head: 'Diagnóstico' }] : []),
+       ...(beta('teleguiado') ? [{ label: 'Ponto a ponto na placa…', run: () => showSidebarTab('guide' as never) }] : []),
+-      ...(beta('curvas') ? [{ label: 'Curvas (RastreCurve / Smart Curve) — Beta…', run: () => showSidebarTab('curves' as never) }] : []),
++      ...(beta('curvas') ? [{ label: 'Curvas (RastreCurve / Smart Curve)…', run: () => showSidebarTab('curves' as never) }] : []),
+     ] },
+     { name: 'Preferências', items: [
+       { head: 'Aparência da placa' },
+diff --git a/src/frontend/src/components/Sidebar.utils.ts b/src/frontend/src/components/Sidebar.utils.ts
+index 5e79e6d0..54cdabe8 100644
+--- a/src/frontend/src/components/Sidebar.utils.ts
++++ b/src/frontend/src/components/Sidebar.utils.ts
+@@ -54,7 +54,7 @@ export const TABS: readonly SidebarTabDef[] = [
+   // 2R Tools: Acervo 2R (nuvem) — só aparece dentro do app 2R Tools
+   ...(IS_2R ? [{ id: 'acervo' as const, label: 'Acervo 2R', icon: IconCloud, group: 'top' as const },
+              ...(beta('medicoes') ? [{ id: 'meter' as const, label: 'Medições', icon: IconGauge, group: 'top' as const }] : []),
+-             ...(beta('curvas') ? [{ id: 'curves' as const, label: 'Curvas β', icon: IconWaveSine, group: 'top' as const }] : []),
++             ...(beta('curvas') ? [{ id: 'curves' as const, label: 'Curvas', icon: IconWaveSine, group: 'top' as const }] : []),
+              ...(beta('teleguiado') ? [{ id: 'guide' as const, label: 'Ponto a ponto', icon: IconRoute, group: 'top' as const }] : [])] : []),
+   { id: 'library',  label: IS_2R ? 'Local' : 'Library',  icon: IconBooks,      group: 'top' },
+   { id: 'history',  label: IS_2R ? 'Histórico' : 'History',  icon: IconHistory,    group: 'top' },
+@@ -109,6 +109,8 @@ function coerceTab(tab: SidebarTab): SidebarTab {
+ }
+ 
+ function loadTab(): SidebarTab {
++  // 2R 16/10/2026: abre SEMPRE no Acervo 2R (Configurações › bv_acervo_sempre → window.__2rAcervoAlways)
++  if (IS_2R && (window as unknown as { __2rAcervoAlways?: boolean }).__2rAcervoAlways !== false) return 'acervo';
+   // 2R Tools: a aba do Acervo 2R (nuvem) é a padrão — vale na 1ª vez (10/10/2026)
+   if (IS_2R && readKey('2r-acervo-tab-default') !== '1') {
+     writeKey('2r-acervo-tab-default', '1');
+diff --git a/src/frontend/src/main.tsx b/src/frontend/src/main.tsx
+index b550876d..e9615de7 100644
+--- a/src/frontend/src/main.tsx
++++ b/src/frontend/src/main.tsx
+@@ -1,4 +1,5 @@
+ import './polyfills';
++import './r2/hand-globals';
+ import { installPortuguese } from './r2/translate';
+ import { installBridge } from './r2/bridge';
+ import { installMeter } from './r2/meter-store';
+diff --git a/src/frontend/src/panels/CurvesPanel.tsx b/src/frontend/src/panels/CurvesPanel.tsx
+index 993c54e7..23388ea7 100644
+--- a/src/frontend/src/panels/CurvesPanel.tsx
++++ b/src/frontend/src/panels/CurvesPanel.tsx
+@@ -81,7 +81,7 @@ export function CurvesPanel() {
+ 
+   return (
+     <div className="r2acv r2cv">
+-      <div className="r2acv-title"><IconWaveSine size={16} /> Curvas <span className="r2-beta">Beta</span>
++      <div className="r2acv-title"><IconWaveSine size={16} /> Curvas 
+         <span className="r2acv-sub">{curvesStore.capacitado ? 'técnico capacitado' : 'contribuição'}</span></div>
+ 
+       <div className="r2acv-section">
+diff --git a/src/frontend/src/r2/hand-flags.ts b/src/frontend/src/r2/hand-flags.ts
+new file mode 100644
+index 00000000..9a24f7e9
+--- /dev/null
++++ b/src/frontend/src/r2/hand-flags.ts
+@@ -0,0 +1,11 @@
++// 2R Tools — chaves e utilidades pequenas das edições à mão do bundle 0.48.0 (portadas para o fonte).
++/* 2R 20/10/2026: pads em cinza discreto (só a net escolhida acende). localStorage «2r-pads-coloridos»="1" volta às cores */
++let R2PC: boolean | null = null;
++export function r2PadsColoridos(): boolean {
++  if (R2PC === null) {
++    try { R2PC = localStorage.getItem('2r-pads-coloridos') === '1'; } catch { R2PC = false; }
++  }
++  return R2PC;
++}
++export const R2_PAD_CINZA_BOTTOM = 6974058; // 0x6a6a6a
++export const R2_PAD_CINZA_TOP = 7960953; // 0x797979
+diff --git a/src/frontend/src/r2/hand-globals.tsx b/src/frontend/src/r2/hand-globals.tsx
+new file mode 100644
+index 00000000..de3c467d
+--- /dev/null
++++ b/src/frontend/src/r2/hand-globals.tsx
+@@ -0,0 +1,37 @@
++// 2R Tools — globais que estavam no topo do bundle editado à mão (0.48.0), portados para o fonte.
++/* eslint-disable @typescript-eslint/no-explicit-any */
++import { jsx, jsxs } from 'react/jsx-runtime';
++
++/* 2R 24/10/2026: última posição do mouse (zoom na direção do mouse) */
++try {
++  window.addEventListener('pointermove', (e: PointerEvent) => {
++    (window as any).__r2MouseXY = { x: e.clientX, y: e.clientY, t: Date.now() };
++  }, { passive: true, capture: true });
++} catch { /* */ }
++
++/* 2R-postits (16/10/2026): separa a observação por « | » e pinta AÇÃO / ATENÇÃO / ESPERADO / EXPLICA / RESOLVIDO.
++   O 1º parâmetro (runtime JSX) é mantido por compatibilidade com quem chama de fora; aqui usa o runtime próprio. */
++(window as any).__r2Notes = function (_d: unknown, note: string, cls: string, hud?: boolean) {
++  const d = { jsx, jsxs } as any;
++  const T: Record<string, string> = { 'AÇÃO': 'acao', 'ATENÇÃO': 'atencao', 'ESPERADO': 'esperado', 'EXPLICA': 'explica', 'RESOLVIDO': 'resolvido' };
++  const out: { k: string; t: string }[] = [];
++  const plain: string[] = [];
++  String(note).split(' | ').forEach((p) => {
++    const m = /^(AÇÃO|ATENÇÃO|ESPERADO|EXPLICA|RESOLVIDO):\s*([\s\S]*)$/.exec(p);
++    if (m) out.push({ k: T[m[1]], t: m[2] }); else plain.push(p);
++  });
++  if (cls === 'r2hist-sub' && out.length) return null;
++  if (!out.length) return hud ? d.jsxs('span', { className: cls, children: [' · ', note] }) : d.jsx('span', { className: cls, children: note });
++  return d.jsxs('span', {
++    className: 'r2pi-wrap ' + cls,
++    children: [
++      plain.length ? d.jsx('span', { className: 'r2pi-plain', children: plain.join(' · ') }) : null,
++      out.map((o, i) => d.jsx('span', {
++        className: 'r2pi r2pi-' + o.k,
++        title: o.k === 'acao' ? 'Ação deste passo' : o.k === 'atencao' ? 'Atenção' : o.k === 'esperado' ? 'Valor esperado' : o.k === 'resolvido' ? 'Resolução confirmada' : 'Explicação',
++        children: o.t,
++      }, i)),
++    ],
++  });
++};
++export {};
+diff --git a/src/frontend/src/r2/loose-match.ts b/src/frontend/src/r2/loose-match.ts
+index 3193a85a..637285b3 100644
+--- a/src/frontend/src/r2/loose-match.ts
++++ b/src/frontend/src/r2/loose-match.ts
+@@ -31,3 +31,14 @@ export function looseFind(text: string, q: string, from = 0): [number, number] |
+   if (p < 0) return null;
+   return [map[p], map[p + nq.length - 1] + 1];
+ }
++
++/* 2R 26/10/2026 (Roger: «coloca uma opção para fazer a busca exata ou similares»): uma chave para a placa («bdv») e outra para o PDF («pdf») */
++export function r2BuscaExata(k: 'bdv' | 'pdf'): boolean {
++  try { return localStorage.getItem('2r-busca-exata-' + k) === '1'; } catch { return false; }
++}
++/** looseMatch, ou nome idêntico quando a busca exata da placa está ligada. */
++export function r2Match(name: string, q: string | string[]): boolean {
++  if (!r2BuscaExata('bdv')) return looseMatch(name, q);
++  const t = String(Array.isArray(q) ? q.join(' ') : q).trim().toLowerCase();
++  return !!t && String(name || '').toLowerCase() === t;
++}
+diff --git a/src/frontend/src/r2/translate.ts b/src/frontend/src/r2/translate.ts
+index ef0de5b4..8ecdfc75 100644
+--- a/src/frontend/src/r2/translate.ts
++++ b/src/frontend/src/r2/translate.ts
+@@ -79,12 +79,12 @@ const ES: Record<string, string> = {
+ 
+ // Textos da 2R (escritos em português no código) → espanhol / inglês
+ const MINE_ES: Record<string, string> = {
+-  "Curvas β": "Curvas β", "Start β": "Arranque β", "Sequência de start": "Secuencia de arranque", "Ligar sequência": "Activar secuencia", "Curvas (RastreCurve / Smart Curve) — Beta…": "Curvas (RastreCurve / Smart Curve) — Beta…", "Sequência de start na placa — Beta…": "Secuencia de arranque en la placa — Beta…", "Converter": "Convertir", "Roteiros desta placa": "Guiones de esta placa", "Novo roteiro": "Nuevo guion", "trocar roteiro": "cambiar guion", "Capturar curva": "Capturar curva", "Foto da tela": "Foto de la pantalla", "Curva firme — pode capturar": "Curva estable — puede capturar", "Esperando a curva firmar (capacitores carregando)…": "Esperando que la curva se estabilice (capacitores cargando)…", "Capturar sozinho quando a curva firmar": "Capturar solo cuando la curva se estabilice", "Igual à oficial": "Igual a la oficial", "Parecida": "Parecida", "Diferente da oficial": "Diferente de la oficial", "Aprovar": "Aprobar", "Recusar": "Rechazar", "Perfil": "Perfil", "Ponta preta (referência)": "Punta negra (referencia)", "Bateria e carregador desligados": "Batería y cargador desconectados", "Placa descansada (capacitores descarregados)": "Placa en reposo (capacitores descargados)",
+-  "Medições β": "Mediciones β", "Multímetro e medições (Rigol / i2C) — Beta…": "Multímetro y mediciones (Rigol / i2C) — Beta…", "Mapear componente (sequência dos pinos) — Beta…": "Mapear componente (secuencia de los pines) — Beta…",
++  "Curvas": "Curvas", "Start": "Arranque", "Sequência de start": "Secuencia de arranque", "Ligar sequência": "Activar secuencia", "Curvas (RastreCurve / Smart Curve)…": "Curvas (RastreCurve / Smart Curve)…", "Sequência de start na placa…": "Secuencia de arranque en la placa…", "Converter": "Convertir", "Roteiros desta placa": "Guiones de esta placa", "Novo roteiro": "Nuevo guion", "trocar roteiro": "cambiar guion", "Capturar curva": "Capturar curva", "Foto da tela": "Foto de la pantalla", "Curva firme — pode capturar": "Curva estable — puede capturar", "Esperando a curva firmar (capacitores carregando)…": "Esperando que la curva se estabilice (capacitores cargando)…", "Capturar sozinho quando a curva firmar": "Capturar solo cuando la curva se estabilice", "Igual à oficial": "Igual a la oficial", "Parecida": "Parecida", "Diferente da oficial": "Diferente de la oficial", "Aprovar": "Aprobar", "Recusar": "Rechazar", "Perfil": "Perfil", "Ponta preta (referência)": "Punta negra (referencia)", "Bateria e carregador desligados": "Batería y cargador desconectados", "Placa descansada (capacitores descarregados)": "Placa en reposo (capacitores descargados)",
++  "Medições": "Mediciones", "Multímetro e medições (Rigol / i2C)…": "Multímetro y mediciones (Rigol / i2C)…", "Mapear componente (sequência dos pinos)…": "Mapear componente (secuencia de los pines)…",
+   "Apagar as desta placa?": "¿Borrar las de esta placa?", "Salvo na pasta da loja: todos os computadores veem estas medições.": "Guardado en la carpeta del taller: todas las computadoras ven estas mediciones.", "Salvo só neste computador (a pasta da loja não está ligada).": "Guardado solo en esta computadora (la carpeta del taller no está activa).",
+   "Captura automática": "Captura automática", "Captura manual": "Captura manual", "Grava quando a leitura fica parada por": "Graba cuando la lectura queda quieta por", "Tecla para gravar:": "Tecla para grabar:", "Aperte a tecla…": "Presione la tecla…", "Gravar agora": "Grabar ahora", "Som da leitura (quando a leitura firma)": "Sonido de la lectura (cuando la lectura se estabiliza)", "♪ dentro da margem": "♪ dentro del margen", "♪ um pouco fora": "♪ un poco fuera", "♪ muito fora": "♪ muy fuera", "Som da gravação": "Sonido de la grabación", "♪ gravou": "♪ grabó", "♪ não gravou": "♪ no grabó", "Medições gravadas em nome de": "Mediciones grabadas a nombre de", "Apagar tudo?": "¿Borrar todo?", "Corrigir o valor": "Corregir el valor", "Apagar esta medição": "Borrar esta medición", "Sem leitura agora (ponta aberta).": "Sin lectura ahora (punta abierta).", "Clique e aperte a tecla que você quer usar": "Haga clic y presione la tecla que quiere usar", "Ouvir": "Escuchar",
+   "Mapear componente": "Mapear componente", "Clique num componente na placa para ver a sequência dos pinos e o ponto de medição mais próximo.": "Haga clic en un componente de la placa para ver la secuencia de los pines y el punto de medición más cercano.", "Mapear": "Mapear", "medidos": "medidos", "Sequência dos pinos": "Secuencia de los pines", "Pino 1, anti-horário (padrão)": "Pin 1, antihorario (estándar)", "Pino 1, horário": "Pin 1, horario", "Ímpares primeiro, depois pares (FPC)": "Impares primero, después pares (FPC)", "Pares primeiro, depois ímpares (FPC)": "Pares primero, después impares (FPC)", "Ordem dos números (1, 2, 3…)": "Orden de los números (1, 2, 3…)", "Ir sozinho para o próximo pino depois de medir": "Pasar solo al siguiente pin después de medir", "Pular pinos de GND": "Saltar pines de GND", "◀ Anterior": "◀ Anterior", "Próximo ▶": "Siguiente ▶", "Sem acesso ao pad de": "¿Sin acceso al pad de", "? Meça a mesma net (": "? Mida la misma net (", ") em:": ") en:", "Nenhum ponto de teste ou passivo nessa net.": "Ningún punto de prueba o pasivo en esa net.", "Mostrar na placa": "Mostrar en la placa", "Medir aqui": "Medir aquí", "Medindo aqui ✓": "Midiendo aquí ✓", "ponto de teste": "punto de prueba", "passivo": "pasivo", "· outro lado": "· otro lado", "Mapear componente (sequência dos pinos)…": "Mapear componente (secuencia de los pines)…", "Próximo pino da sequência": "Siguiente pin de la secuencia", "Pino anterior da sequência": "Pin anterior de la secuencia", "· em": "· en",
+-  "Medições": "Mediciones", "ligado": "conectado", "desligado": "desconectado", "Rigol DM858E (rede)": "Rigol DM858E (red)", "i2C C09 (USB)": "i2C C09 (USB)", "IP do Rigol (Utility › I/O › LAN)": "IP del Rigol (Utility › I/O › LAN)", "Porta USB": "Puerto USB", "Velocidade": "Velocidad", "Ligar": "Conectar", "Desligar": "Desconectar", "Aprender (10 s)": "Aprender (10 s)", "Procurar portas": "Buscar puertos", "Desligado": "Desconectado", "Clique no pino na placa e encoste a ponta: quando a leitura firma, ela entra sozinha na lista abaixo.": "Haga clic en el pin en la placa y apoye la punta: cuando la lectura se estabiliza, entra sola en la lista de abajo.", "Tolerância:": "Tolerancia:", "Diodo": "Diodo", "Tensão": "Tensión", "Resistência": "Resistencia", "Pino": "Pin", "Net": "Net", "Medido": "Medido", "Esperado": "Esperado", "Salvar em planilha (CSV)": "Guardar en planilla (CSV)", "Limpar o histórico": "Limpiar el historial", "Multímetro e medições (Rigol / i2C)…": "Multímetro y mediciones (Rigol / i2C)…",
++  "Medições": "Mediciones", "ligado": "conectado", "desligado": "desconectado", "Rigol DM858E (rede)": "Rigol DM858E (red)", "IP do Rigol (Utility › I/O › LAN)": "IP del Rigol (Utility › I/O › LAN)", "Porta USB": "Puerto USB", "Velocidade": "Velocidad", "Ligar": "Conectar", "Desligar": "Desconectar", "Aprender (10 s)": "Aprender (10 s)", "Procurar portas": "Buscar puertos", "Desligado": "Desconectado", "Clique no pino na placa e encoste a ponta: quando a leitura firma, ela entra sozinha na lista abaixo.": "Haga clic en el pin en la placa y apoye la punta: cuando la lectura se estabiliza, entra sola en la lista de abajo.", "Tolerância:": "Tolerancia:", "Diodo": "Diodo", "Tensão": "Tensión", "Resistência": "Resistencia", "Pino": "Pin", "Net": "Net", "Medido": "Medido", "Esperado": "Esperado", "Salvar em planilha (CSV)": "Guardar en planilla (CSV)", "Limpar o histórico": "Limpiar el historial", "Multímetro e medições (Rigol / i2C)…": "Multímetro y mediciones (Rigol / i2C)…",
+   "Tudo": "Todo", "No componente": "En el componente", "Onde buscar: tudo ou só nos pinos do componente selecionado": "Dónde buscar: todo o solo en los pines del componente seleccionado", "Selecione um componente na placa": "Seleccione un componente en la placa", "Nenhum pino encontrado": "Ningún pin encontrado", "Microscópio: câmera ao lado, mesclar com a placa e transparência": "Microscopio: cámara al lado, mezclar con la placa y transparencia", "Microscópio (câmera, mesclar, transparência)": "Microscopio (cámara, mezclar, transparencia)", "Câmera ao lado da placa": "Cámara al lado de la placa", "Mesclar: ligado": "Mezclar: encendido", "Mesclar com a placa": "Mezclar con la placa",
+   "Arquivo": "Archivo", "Exibir": "Ver", "Preferências": "Preferencias", "Ajuda": "Ayuda", "Abrir boardview ou PDF…": "Abrir boardview o PDF…", "Acervo 2R (nuvem)": "Acervo 2R (nube)", "Enviar arquivo novo ao acervo…": "Enviar archivo nuevo al acervo…", "Abertos recentemente": "Abiertos recientemente", "Centralizar a placa": "Centrar la placa", "2 janelas (PDF numa segunda janela)": "2 ventanas (PDF en una segunda ventana)", "Painel lateral (mostrar / esconder)": "Panel lateral (mostrar / ocultar)", "Legenda das cores das nets": "Leyenda de colores de las nets", "Barra de status": "Barra de estado", "Virar a placa (superior ↔ inferior)": "Voltear la placa (superior ↔ inferior)", "Girar para a esquerda": "Girar a la izquierda", "Girar para a direita": "Girar a la derecha", "Linhas das nets (desligado → estrela → corrente)": "Líneas de las nets (apagado → estrella → cadena)", "Buscar componente ou net": "Buscar componente o net", "Microscópio (câmera USB)": "Microscopio (cámara USB)", "Mesclar imagem real com a placa": "Mezclar imagen real con la placa", "Ajustes do Boardview…": "Ajustes del Boardview…", "Letra maior": "Letra más grande", "Letra menor": "Letra más chica", "Letra no tamanho padrão": "Letra en tamaño estándar", "Voltar a barra de ícones ao padrão": "Volver la barra de íconos al estándar", "Atalhos do teclado": "Atajos del teclado", "Espaço": "Espacio",
+   'Local': 'Local', 'Histórico': 'Historial', 'Ferramentas': 'Herramientas', 'Diagnóstico': 'Diagnóstico', 'Ajustes': 'Ajustes',
+@@ -142,8 +142,8 @@ const MINE_ES: Record<string, string> = {
+ };
+ 
+ const MINE_EN: Record<string, string> = {
+-  "Curvas β": "Curves β", "Start β": "Power-on β", "Sequência de start": "Power-on sequence", "Ligar sequência": "Start sequence", "Curvas (RastreCurve / Smart Curve) — Beta…": "Curves (RastreCurve / Smart Curve) — Beta…", "Sequência de start na placa — Beta…": "Power-on sequence on the board — Beta…", "Converter": "Convert", "Roteiros desta placa": "Scripts for this board", "Novo roteiro": "New script", "trocar roteiro": "change script", "Capturar curva": "Capture curve", "Foto da tela": "Screen photo", "Curva firme — pode capturar": "Curve settled — ready to capture", "Esperando a curva firmar (capacitores carregando)…": "Waiting for the curve to settle (capacitors charging)…", "Capturar sozinho quando a curva firmar": "Capture automatically when the curve settles", "Igual à oficial": "Same as official", "Parecida": "Similar", "Diferente da oficial": "Different from official", "Aprovar": "Approve", "Recusar": "Reject", "Perfil": "Profile", "Ponta preta (referência)": "Black probe (reference)", "Bateria e carregador desligados": "Battery and charger disconnected", "Placa descansada (capacitores descarregados)": "Board rested (capacitors discharged)",
+-  "Medições β": "Measurements β", "Multímetro e medições (Rigol / i2C) — Beta…": "Multimeter and measurements (Rigol / i2C) — Beta…", "Mapear componente (sequência dos pinos) — Beta…": "Map component (pin sequence) — Beta…",
++  "Curvas": "Curves", "Start": "Power-on", "Sequência de start": "Power-on sequence", "Ligar sequência": "Start sequence", "Curvas (RastreCurve / Smart Curve)…": "Curves (RastreCurve / Smart Curve)…", "Sequência de start na placa…": "Power-on sequence on the board…", "Converter": "Convert", "Roteiros desta placa": "Scripts for this board", "Novo roteiro": "New script", "trocar roteiro": "change script", "Capturar curva": "Capture curve", "Foto da tela": "Screen photo", "Curva firme — pode capturar": "Curve settled — ready to capture", "Esperando a curva firmar (capacitores carregando)…": "Waiting for the curve to settle (capacitors charging)…", "Capturar sozinho quando a curva firmar": "Capture automatically when the curve settles", "Igual à oficial": "Same as official", "Parecida": "Similar", "Diferente da oficial": "Different from official", "Aprovar": "Approve", "Recusar": "Reject", "Perfil": "Profile", "Ponta preta (referência)": "Black probe (reference)", "Bateria e carregador desligados": "Battery and charger disconnected", "Placa descansada (capacitores descarregados)": "Board rested (capacitors discharged)",
++  "Medições": "Measurements", "Multímetro e medições (Rigol / i2C)…": "Multimeter and measurements (Rigol / i2C)…", "Mapear componente (sequência dos pinos)…": "Map component (pin sequence)…",
+   "Apagar as desta placa?": "Delete this board's?", "Salvo na pasta da loja: todos os computadores veem estas medições.": "Saved in the shop folder: every computer sees these measurements.", "Salvo só neste computador (a pasta da loja não está ligada).": "Saved on this computer only (the shop folder is not set up).",
+   "Captura automática": "Automatic capture", "Captura manual": "Manual capture", "Grava quando a leitura fica parada por": "Saves when the reading holds still for", "Tecla para gravar:": "Key to save:", "Aperte a tecla…": "Press the key…", "Gravar agora": "Save now", "Som da leitura (quando a leitura firma)": "Reading sound (when the reading settles)", "♪ dentro da margem": "♪ within margin", "♪ um pouco fora": "♪ slightly off", "♪ muito fora": "♪ far off", "Som da gravação": "Save sound", "♪ gravou": "♪ saved", "♪ não gravou": "♪ not saved", "Medições gravadas em nome de": "Measurements saved as", "Apagar tudo?": "Delete all?", "Corrigir o valor": "Correct the value", "Apagar esta medição": "Delete this measurement", "Sem leitura agora (ponta aberta).": "No reading now (probe open).", "Clique e aperte a tecla que você quer usar": "Click and press the key you want to use", "Ouvir": "Listen",
+   "Mapear componente": "Map component", "Clique num componente na placa para ver a sequência dos pinos e o ponto de medição mais próximo.": "Click a part on the board to see its pin sequence and the nearest measuring point.", "Mapear": "Map", "medidos": "measured", "Sequência dos pinos": "Pin sequence", "Pino 1, anti-horário (padrão)": "Pin 1, counter-clockwise (default)", "Pino 1, horário": "Pin 1, clockwise", "Ímpares primeiro, depois pares (FPC)": "Odd first, then even (FPC)", "Pares primeiro, depois ímpares (FPC)": "Even first, then odd (FPC)", "Ordem dos números (1, 2, 3…)": "Number order (1, 2, 3…)", "Ir sozinho para o próximo pino depois de medir": "Go to the next pin after measuring", "Pular pinos de GND": "Skip GND pins", "◀ Anterior": "◀ Previous", "Próximo ▶": "Next ▶", "Sem acesso ao pad de": "No access to the pad of", "? Meça a mesma net (": "? Measure the same net (", ") em:": ") at:", "Nenhum ponto de teste ou passivo nessa net.": "No test point or passive on this net.", "Mostrar na placa": "Show on the board", "Medir aqui": "Measure here", "Medindo aqui ✓": "Measuring here ✓", "ponto de teste": "test point", "passivo": "passive", "· outro lado": "· other side", "Mapear componente (sequência dos pinos)…": "Map component (pin sequence)…", "Próximo pino da sequência": "Next pin in sequence", "Pino anterior da sequência": "Previous pin in sequence", "· em": "· at",
+@@ -219,7 +219,9 @@ function lang(): 'pt' | 'es' | 'en' {
+   const l = pickLang();
+   return l === 'es' ? 'es' : l === 'en' ? 'en' : 'pt';
+ }
+-const DICT: Record<string, string> = lang() === 'es' ? { ...ES, ...MINE_ES } : lang() === 'en' ? MINE_EN : PT;
++// 2R 22/10/2026: traduções extras injetadas pelo app (data/ui/boardripper_tr.json → window.__2rTrEn / __2rTrEs)
++const R2W = window as unknown as { __2rTrEs?: Record<string, string>; __2rTrEn?: Record<string, string> };
++const DICT: Record<string, string> = lang() === 'es' ? { ...ES, ...MINE_ES, ...(R2W.__2rTrEs || {}) } : lang() === 'en' ? { ...MINE_EN, ...(R2W.__2rTrEn || {}) } : PT;
+ 
+ const ATTRS = ['placeholder', 'title', 'aria-label', 'data-tooltip'];
+ 
+diff --git a/src/frontend/src/store/board-store.ts b/src/frontend/src/store/board-store.ts
+index 807938c9..749f734b 100644
+--- a/src/frontend/src/store/board-store.ts
++++ b/src/frontend/src/store/board-store.ts
+@@ -19,7 +19,7 @@ import { deriveBoardView } from './derive-board-view';
+ import { navHistoryStore } from './nav-history-store';
+ import type { NavCause } from './nav-history';
+ import type { FoldMode } from './derive-board-view';
+-import { looseMatch } from '../r2/loose-match';
++import { looseMatch, r2Match } from '../r2/loose-match';
+ 
+ 
+ export interface SelectionState {
+@@ -651,6 +651,10 @@ export function boardHasCopper(board: BoardData | null | undefined): boolean {
+ export const BUTTERFLY_COPPER_HIDDEN_MESSAGE =
+   'Butterfly shows both sides flat, so traces, vias and copper layers are hidden while it is on.';
+ 
++/* 2R 27/10/2026 («estudo vira placa sozinho»): buscar/selecionar uma peça do outro lado NÃO vira a placa;
++   quem vira é o ponto a ponto (R2ladoPeca) e o duplo clique no PDF. */
++const R2_VIRA_SOZINHO = false;
++
+ class BoardStore extends Emitter {
+   private _tabs: BoardTab[] = [];
+   private _activeTabId: number | null = null;
+@@ -814,7 +818,7 @@ class BoardStore extends Emitter {
+   get showPins(): boolean { return this.activeTab?.showPins ?? true; }
+   get showOutlines(): boolean { return this.activeTab?.showOutlines ?? true; }
+   get showLabels(): boolean { return this.activeTab?.showLabels ?? true; }
+-  get ghostMode(): GhostMode { return this.activeTab?.ghostMode ?? 'ghosts'; }
++  get ghostMode(): GhostMode { return 'off'; } // 2R 18/10/2026: sem fantasmas do outro lado
+   get showGhosts(): boolean { return this.ghostMode !== 'off'; }
+   get discoHighlight(): boolean { return this.ghostMode === 'disco'; }
+   get hideGhosts(): boolean { return this.activeTab?.hideGhosts ?? false; }
+@@ -1028,7 +1032,7 @@ class BoardStore extends Emitter {
+       showPins: true,
+       showOutlines: true,
+       showLabels: true,
+-      ghostMode: 'ghosts',
++      ghostMode: 'off',
+       layerStates: [],
+       selectedLayerIndex: null,
+       fixatedLayerIndex: null,
+@@ -1292,6 +1296,12 @@ class BoardStore extends Emitter {
+ 
+   async loadFiles(files: FileList | File[]) {
+     const list = Array.from(files);
++    // 2R: abrir uma placa nova fecha as outras (e o PDF) — window.__2rFecharTudo vem do App
++    {
++      const w = window as unknown as { __2rFecharTudo?: (n: string[]) => void };
++      if (w.__2rFecharTudo && list.some(f => getFileExtension(f.name).toLowerCase() !== '.pdf' && !this._tabs.some(t => t.fileName === f.name)))
++        w.__2rFecharTudo(list.map(f => f.name));
++    }
+     // Plain-ASC boards arrive as the three files the sections are named after
+     // — format.asc / nails.asc / pins.asc (issue #26). Selecting them together
+     // means "this is one board", not "open three tabs", so bundle them back
+@@ -1391,7 +1401,7 @@ class BoardStore extends Emitter {
+       showPins: true,
+       showOutlines: true,
+       showLabels: true,
+-      ghostMode: 'ghosts',
++      ghostMode: 'off',
+       layerStates: [],
+       selectedLayerIndex: null,
+       fixatedLayerIndex: null,
+@@ -2331,10 +2341,11 @@ class BoardStore extends Emitter {
+   cycleDimMode() {
+     const tab = this.activeTab;
+     if (!tab) return;
++    // 2R: liga/desliga; Shift+clique liga o holofote (window.__r2DimShift)
+     const next: BoardTab['dimMode'] =
+-      tab.dimMode === 'off'       ? 'dim'
+-      : tab.dimMode === 'dim'     ? 'darklight'
+-      :                             'off';
++      tab.dimMode !== 'off' ? 'off'
++      : (window as unknown as { __r2DimShift?: boolean }).__r2DimShift ? 'darklight'
++      : 'dim';
+     this.updateActiveTab({ dimMode: next });
+     this._saveCurrentViewPrefs();
+     this.notify();
+@@ -2356,6 +2367,7 @@ class BoardStore extends Emitter {
+   toggleFollowPdf() {
+     const tab = this.activeTab;
+     if (!tab) return;
++    try { localStorage.setItem('2r-follow-pdf-on', tab.followPdf ? '0' : '1'); } catch { /* */ }
+     this.updateActiveTab({ followPdf: !tab.followPdf });
+     this._saveCurrentViewPrefs();
+     this.notify();
+@@ -2391,8 +2403,8 @@ class BoardStore extends Emitter {
+     const indices = new Set<number>();
+     for (let i = 0; i < board.parts.length; i++) {
+       const p = board.parts[i];
+-      if (looseMatch(p.name, ql) ||
+-          p.pins.some(pin => looseMatch(pin.net, ql))) {
++      if (r2Match(p.name, ql) ||
++          p.pins.some(pin => r2Match(pin.net, ql))) {
+         results.push(p);
+         indices.add(i);
+       }
+@@ -2455,7 +2467,7 @@ class BoardStore extends Emitter {
+     if (idx < 0) return false;
+ 
+     const part = viewPart(tab, idx) ?? tab.board.parts[idx];
+-    if (!tab.butterfly) {
++    if (!tab.butterfly && R2_VIRA_SOZINHO) {
+       if (part.side === 'top' && !tab.showTop) {
+         Object.assign(tab, { showTop: true, showBottom: false });
+       } else if (part.side === 'bottom' && !tab.showBottom) {
+@@ -2491,7 +2503,7 @@ class BoardStore extends Emitter {
+     const part = viewPart(tab, partIndex) ?? tab.board.parts[partIndex];
+     const pin = part?.pins[pinIndex];
+     if (!part || !pin) return;
+-    if (!tab.butterfly) {
++    if (!tab.butterfly && R2_VIRA_SOZINHO) {
+       if (part.side === 'top' && !tab.showTop) this.updateActiveTab({ showTop: true, showBottom: false });
+       else if (part.side === 'bottom' && !tab.showBottom) this.updateActiveTab({ showTop: false, showBottom: true });
+     }
+@@ -2516,7 +2528,7 @@ class BoardStore extends Emitter {
+     const part = viewPart(tab, idx) ?? tab.board.parts[idx];
+ 
+     // If the part is on the other side and we're not in butterfly mode, flip to it
+-    if (!tab.butterfly) {
++    if (!tab.butterfly && R2_VIRA_SOZINHO) {
+       if (part.side === 'top' && !tab.showTop) {
+         this.updateActiveTab({ showTop: true, showBottom: false });
+       } else if (part.side === 'bottom' && !tab.showBottom) {
+@@ -2562,7 +2574,7 @@ class BoardStore extends Emitter {
+     // side is a view change, not a selection change, so it does not violate
+     // preview's contract — and without it, previewing a bottom-side neighbour
+     // flew the camera to a blank patch of the top side.
+-    if (!tab.butterfly) {
++    if (!tab.butterfly && R2_VIRA_SOZINHO) {
+       if (part.side === 'top' && !tab.showTop) {
+         this.updateActiveTab({ showTop: true, showBottom: false });
+       } else if (part.side === 'bottom' && !tab.showBottom) {
+@@ -2626,7 +2638,7 @@ class BoardStore extends Emitter {
+     if (!tab?.board || !part) return;
+     const pin = part.pins[pinIndex];
+ 
+-    if (!tab.butterfly) {
++    if (!tab.butterfly && R2_VIRA_SOZINHO) {
+       if (part.side === 'top' && !tab.showTop) {
+         this.updateActiveTab({ showTop: true, showBottom: false });
+       } else if (part.side === 'bottom' && !tab.showBottom) {
+diff --git a/src/frontend/src/store/overlay-layout.ts b/src/frontend/src/store/overlay-layout.ts
+index 33d413ee..ce0597f8 100644
+--- a/src/frontend/src/store/overlay-layout.ts
++++ b/src/frontend/src/store/overlay-layout.ts
+@@ -26,7 +26,7 @@ export type NamedSlotId =
+   | 'sideSwitch' | 'butterfly' | 'rotateCCW' | 'rotateCW' | 'transformMenu' | 'history'
+   | 'pdfFollow' | 'scrollMode' | 'fitBoard' | 'minimap' | 'slides'
+   | 'hoverInfo' | 'netDim' | 'netLines' | 'ghosts' | 'diodeValues' | 'traces'
+-  | 'partsDropdown' | 'netsDropdown';
++  | 'partsDropdown' | 'netsDropdown' | 'netNames' | 'partNames';
+ 
+ export type SeparatorSlotId = `sep${number}`;
+ export type OverlaySlotId = NamedSlotId | SeparatorSlotId;
+@@ -37,7 +37,7 @@ const NAMED_SLOT_IDS: ReadonlySet<NamedSlotId> = new Set([
+   'sideSwitch', 'butterfly', 'rotateCCW', 'rotateCW', 'transformMenu', 'history',
+   'pdfFollow', 'scrollMode', 'fitBoard', 'minimap', 'slides',
+   'hoverInfo', 'netDim', 'netLines', 'ghosts', 'diodeValues', 'traces',
+-  'partsDropdown', 'netsDropdown',
++  'partsDropdown', 'netsDropdown', 'netNames', 'partNames',
+ ]);
+ 
+ /** Human names, used by the ribbon's right-click menu and the Settings
+@@ -63,6 +63,8 @@ export const SLOT_LABELS: Readonly<Record<NamedSlotId, string>> = {
+   diodeValues:   'Diode values',
+   partsDropdown: 'Find part',
+   netsDropdown:  'Find net',
++  netNames:      'Net names',
++  partNames:     'Part names',
+ };
+ 
+ export function slotLabel(id: OverlaySlotId): string {
+@@ -123,6 +125,8 @@ export const DEFAULT_OVERLAY_LAYOUT: ReadonlyArray<Readonly<OverlaySlot>> = [
+   { id: 'ghosts',        visible: true },
+   { id: 'diodeValues',   visible: true },
+   { id: 'traces',        visible: true },
++  { id: 'netNames',      visible: true },
++  { id: 'partNames',     visible: true },
+   { id: 'sep2',          visible: true },
+   { id: 'partsDropdown', visible: true },
+   { id: 'netsDropdown',  visible: true },
+diff --git a/src/frontend/src/store/render-settings.ts b/src/frontend/src/store/render-settings.ts
+index 832e7cf9..1e12cdf4 100644
+--- a/src/frontend/src/store/render-settings.ts
++++ b/src/frontend/src/store/render-settings.ts
+@@ -1,4 +1,5 @@
+ import { log } from './log-store';
++import { r2PadsColoridos, R2_PAD_CINZA_BOTTOM, R2_PAD_CINZA_TOP } from '../r2/hand-flags';
+ import { Emitter } from './emitter';
+ import {
+   type OverlaySlot,
+@@ -231,6 +232,8 @@ export interface RenderSettings {
+   ambientDim: boolean;
+ 
+   netLineWidth: number;
++  /** 2R 20/10/2026: força do efeito neon (brilho) em volta da linha da net */
++  netLineGlow?: number;
+   netLineAlpha: number;
+   netLineColor: number;
+   /** Color used for chain-adjacent net lines (the propagated nets reached
+@@ -667,7 +670,7 @@ export const DEFAULTS: RenderSettings = {
+   showPartLabels: true,
+   partLabelShadow: false,
+   pinLabelShadow: true,
+-  labelMinSize: 3,
++  labelMinSize: 9,
+   partLabelScale: 1,
+   pinNumberScale: 1,
+   netLabelScale: 1,
+@@ -681,7 +684,7 @@ export const DEFAULTS: RenderSettings = {
+   partMinBodyRatio: 0.8,
+   pinAlpha: 0.85,
+   showPinNumbers: true,
+-  showNetNames: true,
++  showNetNames: false, // 2R 16/10/2026: nomes das nets nos pinos desligados por padrão
+   showPin1Marker: true,
+   showDiodeValues: true,
+   diodeValuesOnly: false,
+@@ -698,18 +701,19 @@ export const DEFAULTS: RenderSettings = {
+   selectionFillAlpha: 0.07,
+   navTargetSize: 0.25,
+   navZoomMode: 'auto',
+-  netHighlightGrow: 3,
+-  netHighlightAlpha: 0.6,
++  netHighlightGrow: 2,
++  netHighlightAlpha: 1,
+   hdrFocusGlow: false,
+   hdrGlowIntensity: 6,   // provisional — tune live on an HDR display
+   showSelectionHalo: true,
+   lightSelectionStyle: 'highlighter',
+   dimOverlayAlpha: 0.5,
+-  ambientDim: true,
++  ambientDim: false,
+ 
+-  netLineWidth: 3.5,
+-  netLineAlpha: 0.6,
+-  netLineColor: 0xffff44,
++  netLineWidth: 2.5,
++  netLineGlow: 0.3,
++  netLineAlpha: 1,
++  netLineColor: 16766464, // 2R 20/10/2026: amarelo (0xffd600)
+   adjacentNetLineColor: 0x4488ff,
+   netLineDashed: false,
+   netLineDashLength: 8,
+@@ -720,7 +724,7 @@ export const DEFAULTS: RenderSettings = {
+ 
+   showElevatedPartLabel: false,
+   showElevatedPinLabel: false,
+-  showSelectionOverlay: true,
++  showSelectionOverlay: false,
+ 
+   hideTextDuringZoom: true,
+   labelAtlasResolution: 8,
+@@ -760,7 +764,7 @@ export const DEFAULTS: RenderSettings = {
+ 
+   showPadVertices: false,
+   showVertexNumbers: false,
+-  showComponentColors: true,
++  showComponentColors: false,
+   componentFillAlpha: 0.55,
+ 
+   keyboardPanFraction: 0.10,
+@@ -782,22 +786,22 @@ export const DEFAULTS: RenderSettings = {
+ 
+   netColorRules: DEFAULT_NET_COLOR_RULES.map(r => ({ ...r })),
+   pinGroups: DEFAULT_PIN_GROUPS.map(g => ({ ...g, rules: g.rules.map(r => ({ ...r })) })),
+-  defaultPinColorTop: '#44cc44',
+-  defaultPinColorBottom: '#cc4444',
++  defaultPinColorTop: '#8A8D93',
++  defaultPinColorBottom: '#8A8D93',
+ 
+   ncNetPatterns: ['NC', 'NC_*', 'N/C', 'NO CONNECT'],
+ 
+   partTypes: [
+-    { id: 'resistor',  label: 'Resistor',   prefixes: ['R', 'PR', 'PH'],       color: '#222222', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: true },
+-    { id: 'capacitor', label: 'Capacitor',  prefixes: ['C', 'PC'],             color: '#9a5a35', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
+-    { id: 'inductor',  label: 'Inductor',   prefixes: ['L', 'PL', 'B'],        color: '#7a7a7a', padShape: 'natural', bodyShape: 'square',  hidden: false, hierarchyBridge: true },
+-    { id: 'diode',     label: 'Diode',      prefixes: ['D', 'PD', 'Z', 'PZ'],  color: '#2255aa', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: true },
+-    { id: 'crystal',   label: 'Crystal',    prefixes: ['Y', 'X'],              color: '#e2ee00', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
+-    { id: 'transistor', label: 'Transistor', prefixes: ['Q', 'PQ'],             color: '#0d6b55', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
+-    { id: 'ic',        label: 'IC',         prefixes: ['U', 'PU'],             color: '#5a2090', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
+-    { id: 'connector', label: 'Connector',  prefixes: ['J', 'SW'],             color: '#2a5080', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
+-    { id: 'fuse',      label: 'Fuse',       prefixes: ['F'],                   color: '#efefef', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
+-    { id: 'testpoint', label: 'Test Point', prefixes: ['TP'],                  color: '#4a9060', padShape: 'round',   bodyShape: 'natural', hidden: false, hierarchyBridge: false },
++    { id: 'resistor',  label: 'Resistor',   prefixes: ['R', 'PR', 'PH'],       color: '#303234', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: true },
++    { id: 'capacitor', label: 'Capacitor',  prefixes: ['C', 'PC'],             color: '#7f5848', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
++    { id: 'inductor',  label: 'Inductor',   prefixes: ['L', 'PL', 'B'],        color: '#4a4c4f', padShape: 'natural', bodyShape: 'square',  hidden: false, hierarchyBridge: true },
++    { id: 'diode',     label: 'Diode',      prefixes: ['D', 'PD', 'Z', 'PZ'],  color: '#3d4a63', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: true },
++    { id: 'crystal',   label: 'Crystal',    prefixes: ['Y', 'X'],              color: '#8a7d3a', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
++    { id: 'transistor', label: 'Transistor', prefixes: ['Q', 'PQ'],             color: '#3a5249', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
++    { id: 'ic',        label: 'IC',         prefixes: ['U', 'PU'],             color: '#4541b4', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
++    { id: 'connector', label: 'Connector',  prefixes: ['J', 'SW'],             color: '#36475c', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
++    { id: 'fuse',      label: 'Fuse',       prefixes: ['F'],                   color: '#8f8f8f', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
++    { id: 'testpoint', label: 'Test Point', prefixes: ['TP'],                  color: '#988700', padShape: 'round',   bodyShape: 'natural', hidden: false, hierarchyBridge: false },
+     { id: 'shield',    label: 'Shield',     prefixes: ['SH', 'MEC'],           color: '#3a3a3a', padShape: 'natural', bodyShape: 'natural', hidden: false, hierarchyBridge: false },
+   ],
+   hierarchyDepth: 2,
+@@ -1376,6 +1380,8 @@ export function computePartRenderBounds(
+  *  Driven by `pinGroups`; the matched rule's colour wins (outline-only groups
+  *  use it as the outline stroke colour). Falls back to the per-side default. */
+ export function resolvePinColor(settings: RenderSettings, netName: string, side: 'top' | 'bottom'): number {
++  // 2R 20/10/2026: pads em cinza discreto (só a net escolhida acende)
++  if (!r2PadsColoridos()) return side === 'bottom' ? R2_PAD_CINZA_BOTTOM : R2_PAD_CINZA_TOP;
+   const g = resolvePinGroup(settings, netName);
+   if (g) return g.color;
+   const fallback = side === 'bottom' ? settings.defaultPinColorBottom : settings.defaultPinColorTop;
+@@ -2040,6 +2046,7 @@ class RenderSettingsStore extends Emitter {
+ }
+ 
+ export const renderSettingsStore = new RenderSettingsStore();
++(window as unknown as { __2rIe?: unknown }).__2rIe = renderSettingsStore;
+ 
+ // Expose for integration tests (Playwright) — DEV builds only
+ if (typeof window !== 'undefined' && import.meta.env.DEV) {
+-- 
+2.43.0
+

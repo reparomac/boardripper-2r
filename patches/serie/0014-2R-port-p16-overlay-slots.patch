@@ -1,0 +1,198 @@
+From 938ae7ed8a09d49a76ff1417c4f7359e0facee4a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:38:59 -0300
+Subject: [PATCH 14/22] 2R port p16 overlay slots
+
+---
+ .../src/components/overlay/slot-renderers.tsx | 30 +++++++++++++++++--
+ .../components/overlay/slots/NetDimButton.tsx | 14 ++++++---
+ .../components/overlay/slots/R2VisButtons.tsx | 19 ++++++++++++
+ .../components/overlay/slots/SideSwitch.tsx   | 22 ++++++++++----
+ .../components/overlay/slots/SlideButtons.tsx |  2 +-
+ 5 files changed, 75 insertions(+), 12 deletions(-)
+ create mode 100644 src/frontend/src/components/overlay/slots/R2VisButtons.tsx
+
+diff --git a/src/frontend/src/components/overlay/slot-renderers.tsx b/src/frontend/src/components/overlay/slot-renderers.tsx
+index d7e1827b..5bd9ab1b 100644
+--- a/src/frontend/src/components/overlay/slot-renderers.tsx
++++ b/src/frontend/src/components/overlay/slot-renderers.tsx
+@@ -17,6 +17,7 @@ import { SideSwitch }       from './slots/SideSwitch';
+ import { HistoryButtons }   from './slots/HistoryButtons';
+ import { MinimapButton, SlideModeButton } from './slots/SlideButtons';
+ import { ButterflyButton, RotateCcwButton, RotateCwButton, TracesButton, TransformMenuButton } from './slots/TransformButtons';
++import { R2NetNamesBtn, R2PartNamesBtn } from './slots/R2VisButtons';
+ 
+ /**
+  * Returns the rendered ReactNode for a given slot id. Any `sep${number}`
+@@ -45,14 +46,39 @@ export function renderOverlaySlot(id: OverlaySlotId, ctx: SlotCtx): ReactNode {
+     case 'diodeValues':   return <DiodeValuesButton ctx={ctx} />;
+     case 'partsDropdown': return <PartsDropdown ctx={ctx} />;
+     case 'netsDropdown':  return <NetsDropdown ctx={ctx} />;
++    case 'netNames':      return <R2NetNamesBtn />;
++    case 'partNames':     return <R2PartNamesBtn />;
+   }
+ }
+ 
++// 2R 23/10/2026: legenda curta embaixo de cada botão da faixa (PT / EN / ES)
++const R2CAP: Record<string, [string, string, string]> = {
++  sideSwitch: ['Lado', 'Side', 'Lado'], butterfly: ['Borboleta', 'Butterfly', 'Mariposa'],
++  rotateCCW: ['Girar ◀', 'Rotate ◀', 'Girar ◀'], rotateCW: ['Girar ▶', 'Rotate ▶', 'Girar ▶'],
++  transformMenu: ['Mais', 'More', 'Más'], history: ['Histórico', 'History', 'Historial'], traces: ['Trilhas', 'Traces', 'Pistas'],
++  pdfFollow: ['PDF', 'PDF', 'PDF'], scrollMode: ['Rolagem', 'Scroll', 'Scroll'], fitBoard: ['Ajustar', 'Fit', 'Ajustar'],
++  minimap: ['Mapa', 'Map', 'Mapa'], slides: ['Slides', 'Slides', 'Slides'], hoverInfo: ['Info', 'Info', 'Info'],
++  netDim: ['Foco', 'Focus', 'Foco'], netLines: ['Linhas', 'Lines', 'Líneas'], ghosts: ['Lado B', 'Ghosts', 'Lado B'],
++  diodeValues: ['Diodo', 'Diode', 'Diodo'], netNames: ['Nets', 'Nets', 'Nets'], partNames: ['Comp.', 'Parts', 'Comp.'],
++};
++function r2CapTxt(id: string): string | null {
++  const e = R2CAP[id];
++  if (!e) return null;
++  const t = ((typeof window !== 'undefined' && (window as unknown as { __2rLang?: string }).__2rLang) || 'pt').slice(0, 2);
++  return e[t === 'en' ? 1 : t === 'es' ? 2 : 0];
++}
++
+ export function renderOverlayLayout(
+   layout: ReadonlyArray<{ id: OverlaySlotId; visible: boolean }>,
+   ctx: SlotCtx,
+ ): ReactNode[] {
++  // 2R 27/10/2026: «Borboleta» foi para junto de Top/Bottom; o mapa fica sempre à mostra (sem botão)
+   return layout
+-    .filter(s => s.visible)
+-    .map(s => <Fragment key={s.id}>{renderOverlaySlot(s.id, ctx)}</Fragment>);
++    .filter(s => s.visible && s.id !== 'butterfly' && s.id !== 'minimap')
++    .map(s => {
++      const cap = r2CapTxt(s.id);
++      return cap
++        ? <Fragment key={s.id}><span className="r2-capw">{renderOverlaySlot(s.id, ctx)}<span className="r2-cap">{cap}</span></span></Fragment>
++        : <Fragment key={s.id}>{renderOverlaySlot(s.id, ctx)}</Fragment>;
++    });
+ }
+diff --git a/src/frontend/src/components/overlay/slots/NetDimButton.tsx b/src/frontend/src/components/overlay/slots/NetDimButton.tsx
+index cddd5116..238a0c85 100644
+--- a/src/frontend/src/components/overlay/slots/NetDimButton.tsx
++++ b/src/frontend/src/components/overlay/slots/NetDimButton.tsx
+@@ -3,9 +3,9 @@ import { boardStore } from '../../../store/board-store';
+ import type { SlotCtx } from '../slot-ctx';
+ 
+ const MODE_INFO = {
+-  off:       { icon: IconBulbOff,    title: 'Selection dimming: OFF (click for dim)' },
+-  dim:       { icon: IconBulb,       title: 'Selection dimming: ON (click for darklight)' },
+-  darklight: { icon: IconBulbFilled, title: 'Darklight: spotlight around selected (click to turn off)' },
++  off:       { icon: IconBulbOff,    title: 'Foco: desligado — clique para escurecer o resto (Shift+clique: holofote)' },
++  dim:       { icon: IconBulb,       title: 'Foco: ligado — clique para desligar' },
++  darklight: { icon: IconBulbFilled, title: 'Holofote: ligado — clique para desligar' },
+ } as const;
+ 
+ export function NetDimButton({ ctx }: { ctx: SlotCtx }) {
+@@ -15,7 +15,13 @@ export function NetDimButton({ ctx }: { ctx: SlotCtx }) {
+   return (
+     <button
+       className={`board-netlines-toggle ${dimMode !== 'off' ? 'active' : ''}`}
+-      onClick={() => boardStore.cycleDimMode()}
++      onClick={(e) => {
++        // 2R: clique liga/desliga; Shift+clique liga o holofote
++        const w = window as unknown as { __r2DimShift?: boolean };
++        w.__r2DimShift = !!(e && e.shiftKey);
++        boardStore.cycleDimMode();
++        w.__r2DimShift = false;
++      }}
+       title={info.title}
+     >
+       <Icon size={16} />
+diff --git a/src/frontend/src/components/overlay/slots/R2VisButtons.tsx b/src/frontend/src/components/overlay/slots/R2VisButtons.tsx
+new file mode 100644
+index 00000000..18220d5a
+--- /dev/null
++++ b/src/frontend/src/components/overlay/slots/R2VisButtons.tsx
+@@ -0,0 +1,19 @@
++// 2R Tools — botões «NET» (nomes das nets) e «U1» (nomes dos componentes) na faixa da placa
++import { renderSettingsStore, type RenderSettings } from '../../../store/render-settings';
++import { useRenderSettings } from '../../../hooks/useRenderSettings';
++
++function R2VisBtn({ k, title, txt }: { k: 'showNetNames' | 'showPartLabels'; title: string; txt: string }) {
++  const e = useRenderSettings() as RenderSettings;
++  const on = e[k] !== false && !!e[k];
++  return (
++    <button
++      className={`board-netlines-toggle ${on ? 'active' : ''}`}
++      onClick={() => { const r = renderSettingsStore.globalSnapshot(); renderSettingsStore.applyGlobal({ ...r, [k]: !on }); }}
++      title={title}
++    >
++      <span style={{ fontSize: 11, fontWeight: 700, lineHeight: '16px' }}>{txt}</span>
++    </button>
++  );
++}
++export function R2NetNamesBtn() { return <R2VisBtn k="showNetNames" title="Net names" txt="NET" />; }
++export function R2PartNamesBtn() { return <R2VisBtn k="showPartLabels" title="Part names" txt="U1" />; }
+diff --git a/src/frontend/src/components/overlay/slots/SideSwitch.tsx b/src/frontend/src/components/overlay/slots/SideSwitch.tsx
+index f44d9cce..435f83d9 100644
+--- a/src/frontend/src/components/overlay/slots/SideSwitch.tsx
++++ b/src/frontend/src/components/overlay/slots/SideSwitch.tsx
+@@ -4,7 +4,7 @@
+  * keyboard's flip shortcut (hold to peek) is unchanged and named in the tip.
+  * Moved down from the app toolbar in v0.39; behaviour identical.
+  */
+-import { IconStackFront, IconStackBack } from '@tabler/icons-react';
++import { IconStackFront, IconStackBack, IconFlipHorizontal } from '@tabler/icons-react';
+ import { boardStore } from '../../../store/board-store';
+ import { formatShortcut } from '../../../store/keyboard-shortcuts';
+ import type { SlotCtx } from '../slot-ctx';
+@@ -13,8 +13,9 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
+   const t = ctx.thisTab;
+   // The store tracks the file's side='top' layer; on files whose primary
+   // side is the bottom the labels swap so "Top" means what the user sees.
+-  const uiTop    = t.primarySide === 'bottom' ? t.showBottom : t.showTop;
+-  const uiBottom = t.primarySide === 'bottom' ? t.showTop    : t.showBottom;
++  const bf = !!t.butterfly;
++  const uiTop    = !bf && (t.primarySide === 'bottom' ? t.showBottom : t.showTop);
++  const uiBottom = !bf && (t.primarySide === 'bottom' ? t.showTop    : t.showBottom);
+   const tip = `${formatShortcut('flipBoard')} flips · hold it to peek · Shift-click for both sides`;
+   return (
+     <div className="overlay-seg" role="group" aria-label="Board side" data-testid="side-switch">
+@@ -24,7 +25,7 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
+         data-testid="side-top"
+         aria-pressed={uiTop}
+         title={`Top side · ${tip}`}
+-        onClick={(e) => boardStore.selectTop(e.shiftKey)}
++        onClick={(e) => { if (bf) boardStore.toggleButterfly(); boardStore.selectTop(e.shiftKey); }}
+       >
+         <IconStackFront size={15} stroke={1.9} /><span className="overlay-seg-lbl">Top</span>
+       </button>
+@@ -34,10 +35,21 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
+         data-testid="side-bottom"
+         aria-pressed={uiBottom}
+         title={`Bottom side · ${tip}`}
+-        onClick={(e) => boardStore.selectBottom(e.shiftKey)}
++        onClick={(e) => { if (bf) boardStore.toggleButterfly(); boardStore.selectBottom(e.shiftKey); }}
+       >
+         <IconStackBack size={15} stroke={1.9} /><span className="overlay-seg-lbl">Bottom</span>
+       </button>
++      {/* 2R 27/10/2026 (Roger: «add butterfly junto com top e bottom») */}
++      <button
++        type="button"
++        className={`overlay-seg-btn${bf ? ' active' : ''}`}
++        data-testid="side-butterfly"
++        aria-pressed={bf}
++        title="Butterfly · os dois lados lado a lado"
++        onClick={() => boardStore.toggleButterfly()}
++      >
++        <IconFlipHorizontal size={15} stroke={1.9} /><span className="overlay-seg-lbl">Butterfly</span>
++      </button>
+     </div>
+   );
+ }
+diff --git a/src/frontend/src/components/overlay/slots/SlideButtons.tsx b/src/frontend/src/components/overlay/slots/SlideButtons.tsx
+index 2b9a7de0..0f4c4be5 100644
+--- a/src/frontend/src/components/overlay/slots/SlideButtons.tsx
++++ b/src/frontend/src/components/overlay/slots/SlideButtons.tsx
+@@ -13,7 +13,7 @@ export function MinimapButton() {
+       data-testid="minimap-toggle"
+       aria-pressed={on}
+       onClick={() => renderSettingsStore.setMinimapOnPan(!on)}
+-      title={on ? 'Minimap while panning: on (click to turn off)' : 'Minimap while panning: off (click to turn on)'}
++      title={on ? 'Mapa de localização: visível (clique para ocultar)' : 'Mapa de localização: oculto (clique para mostrar)'}
+     >
+       <IconMap2 size={16} />
+     </button>
+-- 
+2.43.0
+

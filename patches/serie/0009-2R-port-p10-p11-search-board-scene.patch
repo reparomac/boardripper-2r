@@ -1,0 +1,2173 @@
+From 557d78e66a1b68ec28d67f43a404ed8e0fdb76a3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:32:17 -0300
+Subject: [PATCH 09/22] 2R port p10-p11 search + board-scene
+
+---
+ src/frontend/src/r2/hand-flags.ts        |   12 +
+ src/frontend/src/r2/hand-geom.ts         | 1827 ++++++++++++++++++++++
+ src/frontend/src/r2/search-sync.ts       |   25 +-
+ src/frontend/src/renderer/board-scene.ts |  119 +-
+ src/frontend/src/renderer/label-model.ts |    2 +
+ src/frontend/src/store/board-store.ts    |    1 +
+ 6 files changed, 1970 insertions(+), 16 deletions(-)
+ create mode 100644 src/frontend/src/r2/hand-geom.ts
+
+diff --git a/src/frontend/src/r2/hand-flags.ts b/src/frontend/src/r2/hand-flags.ts
+index 9a24f7e9..91e64f7e 100644
+--- a/src/frontend/src/r2/hand-flags.ts
++++ b/src/frontend/src/r2/hand-flags.ts
+@@ -9,3 +9,15 @@ export function r2PadsColoridos(): boolean {
+ }
+ export const R2_PAD_CINZA_BOTTOM = 6974058; // 0x6a6a6a
+ export const R2_PAD_CINZA_TOP = 7960953; // 0x797979
++
++/* 2R 20/10/2026: XW (pontes de solda/shunt) não mostram leitura; window.__r2MostrarXW=true mostra */
++export function r2XwOculto(p: { name?: string; refdes?: string } | null | undefined): boolean {
++  return (window as unknown as { __r2MostrarXW?: boolean }).__r2MostrarXW !== true && /^XW/i.test((p && (p.name || p.refdes)) || '');
++}
++/* 2R 27/10/2026 09h13 (Roger: «igual o FlexBV, mas só no fundo de mesa… todo o resto mantém»): a área em volta da placa
++   fica cinza-claro como no FlexBV. Cor em localStorage «2r-mesa-cor»; window.__r2MesaOff=true volta ao fundo do tema */
++export function r2Mesa(c: string): string {
++  if ((window as unknown as { __r2MesaOff?: boolean }).__r2MesaOff === true) return c;
++  try { const v = localStorage.getItem('2r-mesa-cor'); if (v && /^#[0-9a-f]{6}$/i.test(v)) return v; } catch { /* */ }
++  return '#d4d4d4';
++}
+diff --git a/src/frontend/src/r2/hand-geom.ts b/src/frontend/src/r2/hand-geom.ts
+new file mode 100644
+index 00000000..9c59212c
+--- /dev/null
++++ b/src/frontend/src/r2/hand-geom.ts
+@@ -0,0 +1,1827 @@
++// @ts-nocheck
++/* eslint-disable */
++// 2R Tools — geometria dos componentes (pads físicos, contornos, DrMOS, shunt, capacitores, cards do diodo, cruz,
++// contorno externo da placa). Portado VERBATIM das edições à mão do bundle 0.48.0 (20/10 a 27/10/2026).
++// Mudanças pedidas pelo Roger estão comentadas em cada bloco. Chamado por renderer/board-scene.ts e BoardRenderer.ts.
++import { boardStore as U } from '../store/board-store';
++/*2R 20/10/2026 (Roger): pad pequeno ou net selecionada → card do diodo ao lado do pad, virado para dentro do componente (fora quando o componente é pequeno), para o pad ficar à mostra*/ function R2centro(
++  p,
++  k,
++) {
++  if (p.__r2cx == null) {
++    let x = 0,
++      y = 0,
++      n = 0;
++    for (const q of p.pins) q.position && ((x += q.position.x), (y += q.position.y), n++);
++    ((p.__r2cx = n ? x / n : 0), (p.__r2cy = n ? y / n : 0));
++  }
++  return k ? p.__r2cy : p.__r2cx;
++}
++function R2viz(p, q) {
++  if (q.__r2nn == null) {
++    let d = 1 / 0;
++    for (const o of p.pins)
++      if (o !== q && o.position) {
++        const e = Math.hypot(o.position.x - q.position.x, o.position.y - q.position.y);
++        e > 0 && e < d && (d = e);
++      }
++    q.__r2nn = isFinite(d) ? d : 0;
++  }
++  return q.__r2nn;
++}
++function R2tam(b, m, t, C) {
++  /*2R 21/10/2026 (Roger): medição só da linha que está medindo (selecionada) ou do chip selecionado; o resto some. Cards pequenos DENTRO do pad; card maior ao lado só nos pinos da linha selecionada e só se couber no vão entre os pads (sem cobrir o vizinho)*/ b.__side =
++    !1;
++  if (/^[\s\-–—]*$/.test(String(b.text ?? ""))) return 0;
++  if (!b.pad || b.px == null) return C;
++  /*2R 24/10/2026 22h30: o raio do ajuste pode ser maior que o pad desenhado (BGA denso) — limita pela distância até o pino vizinho, para o card nunca passar do pad nem encostar no vizinho*/ const r =
++      Math.min(b.pad, b.nn ? b.nn * 0.46 : b.pad) * t.scale,
++    k =
++      0.6 * Math.max(5, String(b.text).length) +
++      1.1 /*2R 24/10/2026 (Roger: «fora de padrão os tamanhos dos cards»): todo card com a largura de 5 caracteres (0.000); OL não cresce*/,
++    S = U.selection || {},
++    lin = b.net != null && S.highlightedNet === b.net,
++    peca = S.partIndex != null && S.partIndex === b.partIndex,
++    dentro = Math.max(3, Math.min(C, (r * 2 * 0.92) / k));
++  if (!lin && !peca) {
++    /*lente ligada: mostra os valores dos pinos que estão sob a lente (21/10/2026)*/ const L = window.__r2Lente;
++    if (L) {
++      const lx = m.a * b.px + m.c * b.py + m.tx,
++        ly = m.b * b.px + m.d * b.py + m.ty;
++      if (Math.hypot(lx - L.x, ly - L.y) <= L.r) return dentro;
++    }
++    /*2R 24/10/2026 (Roger, igual ao FlexBV): sem poluir — o card só aparece quando o zoom deixa a letra legível DENTRO do pad; por isso os componentes grandes aparecem primeiro, depois os médios e os pequenos. Mínimo em localStorage «2r-obd-min» (px, padrão 7); window.__r2ObdZoomOff=true volta à regra antiga (só linha/peça/lente)*/ if (
++      window.__r2ObdZoomOff === !0
++    )
++      return 0;
++    let mn = 7;
++    try {
++      mn = parseFloat(localStorage.getItem("2r-obd-min") || "7") || 7;
++    } catch {}
++    return dentro >= mn && (r * 2 * 0.92) / k >= mn ? dentro : 0;
++  }
++  if (!lin) {
++    /*2R 24/10/2026 22h25 (Roger: «ainda está poluído… quando tem muitos pads, só aparecer a leitura OBD quando tiver muito zoom e card pequeno»): no componente selecionado vale a mesma regra — o card só aparece quando cabe legível DENTRO do pad*/ let mn2 = 7;
++    try {
++      mn2 = parseFloat(localStorage.getItem("2r-obd-min") || "7") || 7;
++    } catch {}
++    return (r * 2 * 0.92) / k >= mn2 ? dentro : 0;
++  }
++  if (!b.nn) return ((b.__side = !0), C);
++  const x = m.a * b.px + m.c * b.py,
++    y = m.b * b.px + m.d * b.py,
++    cx = m.a * b.cx + m.c * b.cy,
++    cy = m.b * b.cx + m.d * b.cy,
++    p = b.nn * t.scale,
++    g = p - 2 * r - 8,
++    hor = Math.abs(cx - x) >= Math.abs(cy - y),
++    fora = hor ? Math.min(C, g / k, (p - 4) / 1.6) : Math.min(C, g / 1.6, (p - 4) / k);
++  return fora <= dentro * 1.1 ? dentro : ((b.__side = !0), fora);
++}
++function R2lado(b, m, t, G, N) {
++  if (!b.pad || b.px == null) return null;
++  if (!b.__side) return null;
++  const r = b.pad * t.scale,
++    w = G + N * 1.1,
++    h = N * 1.6;
++  const x = m.a * b.px + m.c * b.py + m.tx,
++    y = m.b * b.px + m.d * b.py + m.ty,
++    cx = m.a * b.cx + m.c * b.cy + m.tx,
++    cy = m.b * b.cx + m.d * b.cy + m.ty,
++    dx = cx - x,
++    dy = cy - y,
++    d = Math.hypot(dx, dy),
++    s = d > r + w + 6 ? 1 : -1;
++  return Math.abs(dx) >= Math.abs(dy)
++    ? [x + s * (dx < 0 ? -1 : 1) * (r + w / 2 + 4), y]
++    : [x, y + s * (dy < 0 ? -1 : 1) * (r + h / 2 + 4)];
++}
++/*2R 24/10/2026 21h30 (Roger: «no BDV colocar um ponto de referência, duas linhas cruzadas… sempre manter centralizado com essas duas linhas… padrão em tudo que usa o BDV»): cruz fina no centro da placa, de borda a borda, só referência (não pega clique). localStorage «2r-mira»="0" esconde*/ function R2mira(
++  el,
++) {
++  try {
++    if (!el || el.querySelector(":scope>.r2-mira")) return;
++    if (getComputedStyle(el).position === "static") el.style.position = "relative";
++    const d = document.createElement("div");
++    d.className = "r2-mira";
++    /*09h19 (Roger: «dentro da placa pode deixar mais claro a linha e fora dela mais escura»): a linha usa «diferença» — sobre a placa escura fica cinza-claro, sobre a mesa cinza-clara fica cinza-escuro*/ d.style.cssText =
++      "position:absolute;inset:0;pointer-events:none;z-index:6;mix-blend-mode:difference";
++    const L = "position:absolute;background:rgb(150,150,150)";
++    d.innerHTML =
++      '<i style="' +
++      L +
++      ';left:0;right:0;top:50%;height:1px;transform:translateY(-.5px)"></i><i style="' +
++      L +
++      ';top:0;bottom:0;left:50%;width:1px;transform:translateX(-.5px)"></i>';
++    const up = () => {
++      let on = !0;
++      try {
++        on = localStorage.getItem("2r-mira") !== "0";
++      } catch {}
++      d.style.display = on ? "" : "none";
++    };
++    up();
++    window.addEventListener("storage", up);
++    window.__r2Mira = (v) => {
++      try {
++        localStorage.setItem("2r-mira", v ? "1" : "0");
++      } catch {}
++      up();
++    };
++    el.appendChild(d);
++  } catch {}
++}
++/*2R 24/10/2026 (Roger: «alguns CI estão com falha no contorno… acontece em todos»): o contorno do componente passa a envolver TODOS os pads (o retângulo do arquivo às vezes fica deslocado ou menor que os pads); CI (mais de 4 pinos) com contorno branco, no padrão dos cards. window.__r2CaixaOff=true / __r2CiBranco=false desligam*/ /*2R 27/10/2026 08h24 (print do Roger: U1200, U7800 e U3900 ainda com folga): bola de BGA sem tamanho no arquivo (raio 0) — o desenho usa ~0,45 do passo entre bolas; a margem passa a medir a partir dessa borda. Calculado uma vez por componente*/ function R2raio(
++  P,
++) {
++  if (P.__r2pr !== void 0) return P.__r2pr;
++  P.__r2pr = 0;
++  try {
++    const pts = P.pins.filter((q) => q && q.position).map((q) => q.position),
++      N = Math.min(pts.length, 150);
++    let pm = 1 / 0;
++    for (let i = 0; i < N; i++)
++      for (let j = 0; j < pts.length; j++) {
++        if (i === j) continue;
++        const d = Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y);
++        d > 1e-6 && d < pm && (pm = d);
++      }
++    isFinite(pm) && (P.__r2pr = pm * 0.45);
++  } catch {}
++  return P.__r2pr;
++}
++/*08h31 (Roger: «não aplicou a margem de 0,05 mm no U1200, U7800 e U3900»): o raio que vem no arquivo é maior que a bola desenhada (a tela limita a bola a ~0,45 do passo) — a margem contava a partir desse raio grande. Agora usa o menor dos dois = a bola que aparece*/ function R2rEf(
++  P,
++  q,
++) {
++  const rp = R2raio(P),
++    rq = (q && q.radius) || 0;
++  return rq > 0 && rp > 0 ? Math.min(rq, rp) : rq || rp || 0;
++}
++function R2caixa(P, a) {
++  /*2R 24/10/2026 22h (Roger: «acender só o contorno já existente, sem precisar criar um novo contorno»): desligado por padrão; window.__r2CaixaOn=true religa*/ /*2R 27/10/2026 (Roger: «revisa nos BDV, tem muito CI com o contorno cortado»): volta a valer sozinho para CI e transistores (3 pinos ou mais; Roger: «tá cortado também… QK e UK») — só mexe quando algum pad sai do contorno do arquivo; aí o contorno cresce até envolver todos os pads (com contorno inclinado, vira o retângulo que envolve tudo). Os outros componentes continuam com o contorno do arquivo*/ /*27/10 07h13 (Roger: «os contornos que estavam errados nos CIs, eu pedi para arrumar... esses mantém»): continua ligado para CI/transistor*/ if (
++    window.__r2CaixaOff === !0 ||
++    !P ||
++    !P.pins ||
++    P.pins.length < 3 ||
++    !/^[UQ]/i.test(P.name || "")
++  )
++    return a;
++  /*27/10 07h38 (print do Roger: capacitores de 220UF/2V, que têm 3 ou mais pinos, cresciam e encavalavam): só CI (U…) e transistor (Q…); capacitor, bobina, resistor e o resto ficam sempre no tamanho do arquivo*/ const R2a0 =
++    a;
++  if (a.poly) {
++    let px0 = 1 / 0,
++      py0 = 1 / 0,
++      px1 = -1 / 0,
++      py1 = -1 / 0;
++    for (const v of a.poly) {
++      px0 = Math.min(px0, v[0]);
++      py0 = Math.min(py0, v[1]);
++      px1 = Math.max(px1, v[0]);
++      py1 = Math.max(py1, v[1]);
++    }
++    a = { ...a, x: px0, y: py0, w: px1 - px0, h: py1 - py0, __p: a.poly };
++  }
++  let x0 = 1 / 0,
++    y0 = 1 / 0,
++    x1 = -1 / 0,
++    y1 = -1 / 0;
++  for (const q of P.pins) {
++    if (!q || !q.position) continue;
++    const b = q.padBounds,
++      r = R2rEf(P, q);
++    x0 = Math.min(x0, b ? b.minX : q.position.x - r);
++    y0 = Math.min(y0, b ? b.minY : q.position.y - r);
++    x1 = Math.max(x1, b ? b.maxX : q.position.x + r);
++    y1 = Math.max(y1, b ? b.maxY : q.position.y + r);
++  }
++  if (!isFinite(x0) || !isFinite(x1)) return R2a0;
++  const m = 0; /*27/10 07h50 (Roger: «os contornos dos CI estão passando por cima dos resistores»): sem folga — o contorno encosta na borda do pad*/
++  x0 -= m;
++  y0 -= m;
++  x1 += m;
++  y1 += m;
++  /*2R 27/10/2026 07h54 (Roger: «cria uma regra para a margem ficar tantos mm dos contornos dos pads»): CI (U…) e transistor (Q…) — o contorno é o retângulo que envolve todos os pads + a margem fixa em mm de cada lado (encolhe o contorno grande do arquivo e cresce o que cortava pad). Margem: localStorage «2r-ci-margem-mm» (padrão 0,15 mm; o arquivo está em mils: 1 mm = 39,37 mils). Componente com contorno inclinado mantém a regra antiga. window.__r2CiJusto=false volta ao contorno do arquivo*/ if (
++    window.__r2CiJusto !== !1 &&
++    (!a.__p || !P.__r2gira) /*08h24: vale também quando o contorno do arquivo vem como polígono (chip reto)*/
++  ) {
++    let mm = 0.05; /*27/10 08h33 (print do Roger: U3650, U3640, U3830, U3820, U3810 — «os componentes pequenos também estão com a margem grande, aplica a regra dos 0,05 mm»)*/
++    try {
++      const v = parseFloat(String(localStorage.getItem("2r-ci-margem-mm") || "").replace(",", "."));
++      isFinite(v) && v >= 0 && v <= 5 && (mm = v);
++    } catch {}
++    const g = R2margem(P, mm) * 39.37,
++      { __p: _q2, poly: _o2, ...o2 } = a;
++    return { ...o2, x: x0 - g, y: y0 - g, w: x1 - x0 + 2 * g, h: y1 - y0 + 2 * g };
++  }
++  if (x0 >= a.x - 1e-6 && y0 >= a.y - 1e-6 && x1 <= a.x + a.w + 1e-6 && y1 <= a.y + a.h + 1e-6)
++    return a === R2a0 || a.__p ? R2a0 : a;
++  const nx = Math.min(x0, a.x),
++    ny = Math.min(y0, a.y),
++    mx = Math.max(x1, a.x + a.w),
++    my = Math.max(y1, a.y + a.h),
++    { __p: _q, poly: _o, ...o } = a;
++  return { ...o, x: nx, y: ny, w: mx - nx, h: my - ny };
++}
++/*2R 20/10/2026 (Roger): contorno de todo componente na cor do próprio componente, um tom mais claro*/ function R2claro(
++  h,
++) {
++  const v = parseInt(String(h).replace("#", ""), 16);
++  if (!isFinite(v)) return null;
++  const f = (c) => Math.round(c + (255 - c) * 0.38);
++  return (f((v >> 16) & 255) << 16) | (f((v >> 8) & 255) << 8) | f(v & 255);
++}
++/*2R 27/10/2026 08h03 (print do Roger, U7410 da A2141: «precisa fazer o desenho do chip, está num ângulo de 45 graus»): CI (U…) ou transistor (Q…) montado girado — o retângulo do arquivo fica reto e enorme, cobrindo os vizinhos. O ângulo vem das fileiras de pinos (direção do pino vizinho mais próximo, em pelo menos metade dos pinos); se for inclinado (entre 10° e 80°), o contorno vira esse retângulo girado (pads + a mesma margem em mm dos outros CIs). window.__r2GiraCiOff=true desliga*/ /*2R 27/10/2026 08h13 (Roger: «o U7410… é só ver a pinagem igual aos outros do lado, são do mesmo modelo»): DrMOS PQFN 31L montado girado (ex.: U7410 da A2141, a 45°). O molde só encaixava em 0/90/180/270°: aqui o ângulo vem das fileiras de pinos, os pinos são «desgirados» só para o encaixe, e os pads e o corpo do molde voltam girados (polígonos). window.__r2GiraCiOff=true desliga*/ function R2drmosGiro(
++  P,
++) {
++  try {
++    if (
++      window.__r2GiraCiOff === !0 ||
++      !P ||
++      !P.pins ||
++      P.pins.length < 12 ||
++      P.pins.length > 34 ||
++      !/^U/i.test(P.name || "")
++    )
++      return !1;
++    const pts = P.pins.filter((q) => q && q.position).map((q) => q.position);
++    if (pts.length !== P.pins.length) return !1;
++    const H = new Map();
++    for (let i = 0; i < pts.length; i++) {
++      let m = 1 / 0,
++        dx = 0,
++        dy = 0;
++      for (let j = 0; j < pts.length; j++) {
++        if (i === j) continue;
++        const x = pts[j].x - pts[i].x,
++          y = pts[j].y - pts[i].y,
++          d2 = x * x + y * y;
++        d2 > 1e-9 && d2 < m && ((m = d2), (dx = x), (dy = y));
++      }
++      if (m < 1 / 0) {
++        let g = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
++        g = ((g % 90) + 90) % 90;
++        H.set(g, (H.get(g) || 0) + 1);
++      }
++    }
++    let gd = 0,
++      gn = 0;
++    for (const [g, n] of H) {
++      const n2 = n + (H.get((g + 1) % 90) || 0) + (H.get((g + 89) % 90) || 0);
++      n2 > gn && ((gn = n2), (gd = g));
++    }
++    /*08h22 (Roger: «vai se orientar pelos pinos de 1 a 8… sobrepõe o desenho do chip… a partir daí redireciona os pinos seguindo o mesmo padrão dos outros iguais… só depois faz o contorno»): o ângulo vem da fileira dos pinos 1→8 (reta pelos 8 pinos); a fileira de vizinhos fica só de reserva*/ let g18 =
++      null;
++    {
++      const pn = (n) => P.pins.find((q) => String(q.number ?? q.name ?? "") === String(n));
++      const L = [];
++      for (let n = 1; n <= 8; n++) {
++        const q = pn(n);
++        q && L.push(q.position);
++      }
++      if (L.length >= 6) {
++        let mx = 0,
++          my = 0;
++        for (const v of L) {
++          mx += v.x / L.length;
++          my += v.y / L.length;
++        }
++        let sxx = 0,
++          syy = 0,
++          sxy = 0;
++        for (const v of L) {
++          const x = v.x - mx,
++            y = v.y - my;
++          sxx += x * x;
++          syy += y * y;
++          sxy += x * y;
++        }
++        const t = 0.5 * Math.atan2(2 * sxy, sxx - syy);
++        let g = Math.round((t * 180) / Math.PI);
++        g = ((g % 90) + 90) % 90;
++        g18 = g;
++      }
++    }
++    if (g18 !== null) gd = g18;
++    if (gd < 3 || gd > 87) return !1;
++    let best = null;
++    for (const dd of [0, -1, 1, -2, 2]) {
++      const ph = ((gd + dd) * Math.PI) / 180,
++        c = Math.cos(ph),
++        sn = Math.sin(ph);
++      let cx = 0,
++        cy = 0;
++      for (const p of pts) {
++        cx += p.x / pts.length;
++        cy += p.y / pts.length;
++      }
++      const orig = P.pins.map((q) => q.position);
++      P.pins.forEach((q) => {
++        const dx = q.position.x - cx,
++          dy = q.position.y - cy;
++        q.position = { x: cx + dx * c + dy * sn, y: cy - dx * sn + dy * c };
++      });
++      let ok = !1;
++      try {
++        ok = R2drmos(P) || R2drmos2(P);
++      } catch {}
++      P.pins.forEach((q, i) => {
++        q.position = orig[i];
++      });
++      if (!ok) continue;
++      const R = (x, y) => ({ x: cx + (x - cx) * c - (y - cy) * sn, y: cy + (x - cx) * sn + (y - cy) * c });
++      let u0 = 1 / 0,
++        v0 = 1 / 0,
++        u1 = -1 / 0,
++        v1 = -1 / 0;
++      for (const q of P.pins) {
++        const B = q.padBounds;
++        if (!B) continue;
++        const pl =
++          q.padShape === "poly" && q.padPolygon
++            ? q.padPolygon
++            : [
++                { x: B.minX, y: B.minY },
++                { x: B.maxX, y: B.minY },
++                { x: B.maxX, y: B.maxY },
++                { x: B.minX, y: B.maxY },
++              ];
++        for (const v of pl) {
++          u0 = Math.min(u0, v.x);
++          v0 = Math.min(v0, v.y);
++          u1 = Math.max(u1, v.x);
++          v1 = Math.max(v1, v.y);
++        }
++        const np = pl.map((v) => R(v.x, v.y)),
++          xs = np.map((v) => v.x),
++          ys = np.map((v) => v.y);
++        q.padShape = "poly";
++        q.padPolygon = np;
++        q.padBounds = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
++        delete q.padWidth;
++        delete q.padHeight;
++        delete q.padAngleDeg;
++        delete q.padCornerRadius;
++      }
++      let C;
++      if (P.__r2corpo) {
++        const K = P.__r2corpo;
++        C = [
++          [K.x, K.y],
++          [K.x + K.w, K.y],
++          [K.x + K.w, K.y + K.h],
++          [K.x, K.y + K.h],
++        ];
++        delete P.__r2corpo;
++      } else {
++        const g = 0.05 * 39.37;
++        C = [
++          [u0 - g, v0 - g],
++          [u1 + g, v0 - g],
++          [u1 + g, v1 + g],
++          [u0 - g, v1 + g],
++        ];
++      }
++      P.__r2poly = C.map((v) => {
++        const r = R(v[0], v[1]);
++        return [r.x, r.y];
++      });
++      P.__r2gira = gd + dd;
++      best = 1;
++      break;
++    }
++    return !!best;
++  } catch (e) {
++    return !1;
++  }
++}
++/*2R 27/10/2026 08h12 (Roger: «o contorno dos CIs que têm os pads bem pequenos e com muitos pads, pode pôr 0,05 de margem»): chip grande — 100 pinos ou mais (Roger: «chips grandes com muitos pads pequenos») — e pad típico (mediana) de até 0,4 mm → margem 0,05 mm (localStorage «2r-ci-margem-fina-mm»); o resto continua com a margem normal. Calculado uma vez por componente*/ function R2margem(
++  P,
++  mm,
++) {
++  try {
++    if (P.__r2mf === void 0) {
++      P.__r2mf = !1;
++      if (P.pins && P.pins.length >= 100) {
++        const d = P.pins
++          .map((q) => {
++            const B = q && q.padBounds;
++            return B ? Math.max(B.maxX - B.minX, B.maxY - B.minY) : R2rEf(P, q) * 2;
++          })
++          .filter((v) => v > 0)
++          .sort((a, b) => a - b);
++        d.length && d[d.length >> 1] <= 0.4 * 39.37 && (P.__r2mf = d[d.length >> 1] / 39.37);
++      }
++    }
++    if (!P.__r2mf) return mm;
++    /*08h15 (Roger: «podemos variar entre 0,05 e 0,1»): pad de 0,2 mm ou menor → 0,05 mm; pad de 0,4 mm → 0,1 mm; no meio, proporcional*/ let f =
++      0.05 + Math.max(0, Math.min(1, (P.__r2mf - 0.2) / 0.2)) * 0.05;
++    try {
++      const v = parseFloat(String(localStorage.getItem("2r-ci-margem-fina-mm") || "").replace(",", "."));
++      isFinite(v) && v >= 0 && v <= 5 && (f = v);
++    } catch {}
++    return f;
++  } catch {
++    return mm;
++  }
++}
++/*2R 27/10/2026 08h53 (Roger: «consultar o tamanho deles no PDF e fazer a mesma proporção — 0201, 0402, 0603 e assim por diante» / «os maiores foram mais afetados»): R, C, L e F de 2 pinos com o encapsulamento lido no esquema (window.__r2Pacote) têm o corpo e os pads na medida física (comprimento × largura, em mm → mils), centrados entre os pinos. Sem encapsulamento no esquema fica como estava. window.__r2PacoteOff=true desliga*/ const R2PKMM =
++    {
++      "01005": [0.4, 0.2],
++      "0201": [0.6, 0.3],
++      201: [0.6, 0.3],
++      "0402": [1, 0.5],
++      402: [1, 0.5],
++      1005: [1, 0.5],
++      "01005M": [0.4, 0.2],
++      "0603": [1.6, 0.8],
++      603: [1.6, 0.8],
++      "0805": [2, 1.25],
++      805: [2, 1.25],
++      1206: [3.2, 1.6],
++      3216: [3.2, 1.6],
++      1210: [3.2, 2.5],
++      3225: [3.2, 2.5],
++      1812: [4.5, 3.2],
++      2010: [5, 2.5],
++      2512: [6.4, 3.2],
++      2016: [2, 1.6],
++      2520: [2.5, 2],
++    },
++  R2CASEMM = {
++    A: [3.2, 1.6],
++    B: [3.5, 2.8],
++    T: [3.5, 2.8],
++    C: [6, 3.2],
++    D: [7.3, 4.3],
++    E: [7.3, 4.3],
++    V: [7.3, 6.1],
++    X: [7.3, 4.3],
++  };
++function R2pk(P) {
++  try {
++    if (
++      window.__r2PacoteOn !==
++        !0 /*09h09 (Roger: «volta como estava antes»): tamanho pelo esquema desligado; window.__r2PacoteOn=true religa*/ ||
++      window.__r2PacoteOff === !0 ||
++      !P ||
++      !P.pins ||
++      P.pins.length !== 2 ||
++      !/^[RCLF]/i.test(P.name || "")
++    )
++      return null;
++    const k = window.__r2Pacote && window.__r2Pacote[String(P.name).toUpperCase()];
++    if (!k) return null;
++    let m = R2PKMM[k];
++    if (!m) {
++      const c = /^CASE-([A-Z])/.exec(k);
++      c && (m = R2CASEMM[c[1]]);
++    }
++    if (!m) return null;
++    const a = P.pins[0].position,
++      b = P.pins[1].position;
++    if (!a || !b) return null;
++    const d = Math.hypot(a.x - b.x, a.y - b.y),
++      L = Math.max(m[0] * 39.37, d),
++      W = m[1] * 39.37;
++    return {
++      L,
++      W,
++      tl: Math.min(W, L * 0.3),
++      cx: (a.x + b.x) / 2,
++      cy: (a.y + b.y) / 2,
++      h: Math.abs(a.x - b.x) >= Math.abs(a.y - b.y),
++    };
++  } catch {
++    return null;
++  }
++}
++/*2R 27/10/2026 09h09 (Roger: «só os maiores vamos diminuir 15% na largura apenas»): os 15% valem só para capacitor, fusível e bobina de 2 pinos grandes — pinos a 2,5 mm ou mais (1206, 220UF, bobinas de potência); os pequenos (0201, 0402, 0603) voltam ao desenho original*/ function R2grande(
++  P,
++) {
++  try {
++    if (P.__r2gd === void 0) {
++      const a = P.pins[0].position,
++        b = P.pins[1].position;
++      P.__r2gd = Math.hypot(a.x - b.x, a.y - b.y) >= 2.5 * 39.37;
++    }
++    return P.__r2gd;
++  } catch {
++    return !1;
++  }
++}
++/*2R 27/10/2026 09h54 (Roger: «os capacitores grandes têm que diminuir mais uns 20%»): capacitor grande fica 0,85 × 0,8 = 68% da largura; fusível e bobina continuam 85%. window.__r2CapFino (número) troca o valor dos capacitores*/ /*09h55 (Roger mandou o CA303 «220UF 20% 2V ELEC SM»: «esses eu quero diminuir… dessa família»): os 20% a mais valem só para os capacitores eletrolíticos/polímero — valor lido no esquema de 100UF ou mais; os outros grandes continuam 85%*/ function R2uf(
++  n,
++) {
++  try {
++    const v = window.__r2Valores && window.__r2Valores[String(n).toUpperCase()],
++      m = /^([\d.]+)\s*UF/i.exec(String(v || ""));
++    return m ? parseFloat(m[1]) : 0;
++  } catch {
++    return 0;
++  }
++}
++/*09h57 (Roger: «aplica essa mesma regra nas bobinas / indutores»): bobina grande (L…, pinos a 2,5 mm ou mais) também 68%*/ /*10h03 (Roger: «pode diminuir todas as bobinas… em 20% de largura e 10% de comprimento»): toda bobina de 2 pinos (grande ou pequena) fica com 80% da largura e 90% do comprimento do desenho original*/ function R2kf(
++  P,
++) {
++  const n = (P && P.name) || "";
++  if (/^[LY]/i.test(n)) return 0.8;
++  return /^C/i.test(n) && R2uf(n) >= 100 ? (typeof window.__r2CapFino === "number" ? window.__r2CapFino : 0.68) : 0.85;
++}
++/*2R 27/10/2026 09h54 (print do Roger, C4300…C4445 da 820-01700: «esses com aterramento no meio bugou tudo»): capacitor de 4 terminais (pinos 1 e 3 nas pontas, 2 e 4 = GND no meio dos lados). O desenho genérico de pads de CI espalhava pads grandes por cima dos vizinhos. Agora: corpo retangular entre os pinos, pads das pontas na largura do corpo e os dois de GND pequenos no meio dos lados. window.__r2Cap4Off=true desliga*/ function R2cap4(
++  b,
++) {
++  try {
++    if (!b || !b.parts || window.__r2Cap4Off === !0) return;
++    for (const P of b.parts) {
++      if (!P || !P.pins || P.pins.length !== 4 || !/^C/i.test(P.name || "") || P.__r2shunt || P.__r2pads) continue;
++      const pn = (n) => P.pins.find((q) => String(q.number ?? q.name ?? "") === String(n));
++      const a = pn(1),
++        c = pn(3),
++        e = pn(2),
++        g = pn(4);
++      if (!a || !c || !e || !g || !a.position || !c.position || !e.position || !g.position) continue;
++      const dA = Math.hypot(a.position.x - c.position.x, a.position.y - c.position.y),
++        dB = Math.hypot(e.position.x - g.position.x, e.position.y - g.position.y);
++      if (!(dA > 0 && dB > 0)) continue;
++      let L1 = a,
++        L2 = c,
++        S1 = e,
++        S2 = g,
++        dL = dA,
++        dS = dB;
++      if (dB > dA) {
++        L1 = e;
++        L2 = g;
++        S1 = a;
++        S2 = c;
++        dL = dB;
++        dS = dA;
++      }
++      const hz = Math.abs(L1.position.x - L2.position.x) >= Math.abs(L1.position.y - L2.position.y),
++        tol = dL * 0.15;
++      if (
++        hz
++          ? Math.abs(L1.position.y - L2.position.y) > tol || Math.abs(S1.position.x - S2.position.x) > tol
++          : Math.abs(L1.position.x - L2.position.x) > tol || Math.abs(S1.position.y - S2.position.y) > tol
++      )
++        continue;
++      /*09h56 (Roger: C4356 «0402-THICKSTNCL»): corpo na medida do 0402 — a distância entre os pinos é o comprimento (1,0 mm) e a distância entre os GND é a largura (0,5 mm); pads por dentro do corpo*/ const cx =
++          (L1.position.x + L2.position.x) / 2,
++        cy = (L1.position.y + L2.position.y) / 2,
++        t = dL * 0.22,
++        W = dS,
++        Lb = dL,
++        sp = Math.min(dS * 0.3, dL * 0.18);
++      const R = (x, y, w, h) => ({ minX: x - w / 2, minY: y - h / 2, maxX: x + w / 2, maxY: y + h / 2 }),
++        set = (q, B) => {
++          q.padBounds = B;
++          q.padShape = "rect";
++          delete q.padWidth;
++          delete q.padHeight;
++          delete q.padAngleDeg;
++          delete q.padPolygon;
++          delete q.padCornerRadius;
++        },
++        den = (q, k) => ({ x: q.position.x + (cx - q.position.x) * k, y: q.position.y + (cy - q.position.y) * k });
++      for (const q of [L1, L2]) {
++        const m = den(q, t / dL);
++        set(q, hz ? R(m.x, cy, t, W * 0.9) : R(cx, m.y, W * 0.9, t));
++      }
++      for (const q of [S1, S2]) {
++        const m = den(q, sp / dS);
++        set(q, R(m.x, m.y, sp, sp));
++      }
++      P.__r2corpo = hz
++        ? { x: cx - Lb / 2, y: cy - W / 2, w: Lb, h: W }
++        : { x: cx - W / 2, y: cy - Lb / 2, w: W, h: Lb };
++      P.__r2shunt = 1;
++      P.__r2pads = 1;
++      P.__r2cap4 = 1;
++    }
++  } catch (e) {}
++}
++function R2gira(b) {
++  try {
++    if (!b || !b.parts || window.__r2GiraCiOff === !0) return;
++    let mm = 0.05;
++    try {
++      const v = parseFloat(String(localStorage.getItem("2r-ci-margem-mm") || "").replace(",", "."));
++      isFinite(v) && v >= 0 && v <= 5 && (mm = v);
++    } catch {}
++    for (const P of b.parts) {
++      if (!P || !P.pins || P.pins.length < 3 || P.__r2poly || P.__r2shunt || !/^[UQ]/i.test(P.name || "")) continue;
++      const pts = P.pins.filter((q) => q && q.position).map((q) => q.position);
++      if (pts.length < 3) continue;
++      /*ângulo: direção do pino vizinho mais próximo (as fileiras de pinos), não a área — um chip com pinos em V a 45° quase não ganha área*/ const H =
++          new Map(),
++        Nn = Math.min(pts.length, 300);
++      for (let i = 0; i < Nn; i++) {
++        let m = 1 / 0,
++          dx = 0,
++          dy = 0;
++        for (let j = 0; j < pts.length; j++) {
++          if (i === j) continue;
++          const x = pts[j].x - pts[i].x,
++            y = pts[j].y - pts[i].y,
++            d2 = x * x + y * y;
++          d2 > 1e-9 && d2 < m && ((m = d2), (dx = x), (dy = y));
++        }
++        if (m < 1 / 0) {
++          let g = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
++          g = ((g % 90) + 90) % 90;
++          H.set(g, (H.get(g) || 0) + 1);
++        }
++      }
++      let gd = 0,
++        gn = 0;
++      for (const [g, n] of H) {
++        let n2 = n + (H.get((g + 1) % 90) || 0) + (H.get((g + 89) % 90) || 0);
++        n2 > gn && ((gn = n2), (gd = g));
++      }
++      if (gd < 10 || gd > 80 || gn < Nn * 0.3) continue;
++      /*08h10 (prints do Roger): BGA de bolas desencontradas (U9000, U8200…) também tem vizinho a 45° — só gira quando o desenho dos pinos é um losango: a área do contorno convexo dos pinos fica bem menor que o retângulo reto que os envolve (chip reto ≈ 100%; girado ≈ 50%)*/ {
++        const S = [...pts].sort((p, q) => p.x - q.x || p.y - q.y),
++          cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x),
++          lo = [],
++          up = [];
++        for (const p of S) {
++          while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop();
++          lo.push(p);
++        }
++        for (let i = S.length - 1; i >= 0; i--) {
++          const p = S[i];
++          while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop();
++          up.push(p);
++        }
++        const hu = lo.slice(0, -1).concat(up.slice(0, -1));
++        let ha = 0;
++        for (let i = 0; i < hu.length; i++) {
++          const p = hu[i],
++            q = hu[(i + 1) % hu.length];
++          ha += p.x * q.y - q.x * p.y;
++        }
++        ha = Math.abs(ha) / 2;
++        let x0 = 1 / 0,
++          x1 = -1 / 0,
++          y0 = 1 / 0,
++          y1 = -1 / 0;
++        for (const p of pts) {
++          x0 = Math.min(x0, p.x);
++          x1 = Math.max(x1, p.x);
++          y0 = Math.min(y0, p.y);
++          y1 = Math.max(y1, p.y);
++        }
++        const ba = (x1 - x0) * (y1 - y0);
++        if (!(ba > 0) || ha > ba * 0.72) continue;
++      }
++      let A0 = 0,
++        best = null;
++      for (let d = gd; d <= gd; d++) {
++        const t = (d * Math.PI) / 180,
++          c = Math.cos(t),
++          sn = Math.sin(t);
++        let a0 = 1 / 0,
++          a1 = -1 / 0,
++          b0 = 1 / 0,
++          b1 = -1 / 0;
++        for (const p of pts) {
++          const u = p.x * c + p.y * sn,
++            v = -p.x * sn + p.y * c;
++          u < a0 && (a0 = u);
++          u > a1 && (a1 = u);
++          v < b0 && (b0 = v);
++          v > b1 && (b1 = v);
++        }
++        const A = (a1 - a0) * (b1 - b0);
++        d === 0 && (A0 = A);
++        if (!best || A < best.A - 1e-9) best = { A, d, c, sn, a0, a1, b0, b1 };
++      }
++      if (!best || best.A <= 0) continue;
++      let r = 0;
++      for (const q of P.pins) {
++        const B = q.padBounds;
++        r = Math.max(r, B ? Math.max(B.maxX - B.minX, B.maxY - B.minY) / 2 : q.radius || 0);
++      }
++      const e = r + R2margem(P, mm) * 39.37,
++        { c, sn, a0, a1, b0, b1 } = best,
++        T = (u, v) => [u * c - v * sn, u * sn + v * c];
++      P.__r2poly = [T(a0 - e, b0 - e), T(a1 + e, b0 - e), T(a1 + e, b1 + e), T(a0 - e, b1 + e)];
++      P.__r2gira = best.d;
++    }
++  } catch (e) {}
++}
++function R2shunt(b) {
++  /*2R 20/10/2026: resistor shunt (4 pinos, 2x2) desenhado com 4 pads, um em cada canto, na posição real de cada pino*/ if (
++    !b ||
++    !b.parts ||
++    window.__r2ShuntOff === !0
++  )
++    return;
++  for (const P of b.parts) {
++    if (!P || !P.pins || !/^[RJY]/i.test(P.name || "") || P.__r2shunt) continue;
++    /*2R 27/10/2026 10h17 (Roger: «aplicar essas regras para os cristais que começam com Y, mas os pads precisam seguir o mesmo padrão do shunt»): cristal de 2 pinos → pads redondos no pino (o corpo segue a regra da bobina: 80% da largura e 90% do comprimento)*/ if (
++      /^Y/i.test(P.name || "") &&
++      P.pins.length === 2 &&
++      P.pins[0].position &&
++      P.pins[1].position &&
++      window.__r2CristalOff !== !0
++    ) {
++      const a = P.pins[0].position,
++        b2 = P.pins[1].position,
++        rr = Math.hypot(a.x - b2.x, a.y - b2.y) * 0.3;
++      for (const q of P.pins) {
++        const x = q.position.x,
++          y = q.position.y;
++        q.padBounds = { minX: x - rr, minY: y - rr, maxX: x + rr, maxY: y + rr };
++        q.padShape = "round";
++        delete q.padWidth;
++        delete q.padHeight;
++        delete q.padAngleDeg;
++        delete q.padPolygon;
++        delete q.padCornerRadius;
++      }
++      continue;
++    }
++    if (P.pins.length !== 4) continue;
++    const R2J = /^J/i.test(
++      P.name || "",
++    ); /*2R 27/10/2026 08h35 (Roger mandou a referência do J3830/J3820/J3810 — conector de antena): conector de 4 pinos em cruz = losango com 4 pads redondos grandes, igual ao shunt em cruz; só o caso em cruz (conector 2x2 reto não muda)*/
++    if (R2J && P.pins.some((q) => !q || !q.position)) continue;
++    /*2R 27/10/2026 (Roger: «o resistor shunt está bagunçado… pad redondo, posicionar em cada quina, como tem que ser»): vale também para arquivos que trazem os pads em cruz (um no meio de cada lado) — cada pino vai para a quina mais próxima girando no mesmo sentido, com pad redondo dentro do corpo*/ {
++      const xs = P.pins.map((q) => q.position.x),
++        ys = P.pins.map((q) => q.position.y),
++        x0 = Math.min(...xs),
++        x1 = Math.max(...xs),
++        y0 = Math.min(...ys),
++        y1 = Math.max(...ys),
++        dx = x1 - x0,
++        dy = y1 - y0;
++      if (
++        !R2J &&
++        dx > 0 &&
++        dy > 0 &&
++        P.pins.every(
++          (q) =>
++            (Math.abs(q.position.x - x0) < dx * 0.08 || Math.abs(q.position.x - x1) < dx * 0.08) &&
++            (Math.abs(q.position.y - y0) < dy * 0.08 || Math.abs(q.position.y - y1) < dy * 0.08),
++        ) &&
++        new Set(P.pins.map((q) => (q.position.x - x0 < dx / 2 ? "L" : "R") + (q.position.y - y0 < dy / 2 ? "T" : "B")))
++          .size === 4
++      ) {
++        const rr =
++          Math.min(dx, dy) *
++          (/^Y/i.test(P.name || "")
++            ? 0.25
++            : 0.39); /*cristal: pad um pouco menor que o do shunt, para caber no corpo real*/
++        for (const q of P.pins) {
++          const cx = q.position.x,
++            cy = q.position.y;
++          q.padBounds = { minX: cx - rr, minY: cy - rr, maxX: cx + rr, maxY: cy + rr };
++          q.padShape = "round";
++          delete q.padWidth;
++          delete q.padHeight;
++          delete q.padAngleDeg;
++          delete q.padPolygon;
++          delete q.padCornerRadius;
++        }
++        P.__r2shunt = 1;
++        /*cristal de 4 pinos (Y1250, Y3940…): 4 pads redondos nos cantos, igual ao shunt, e o corpo justo em volta dos pads (+0,05 mm), sem o retângulo grande do arquivo*/ if (
++          /^Y/i.test(P.name || "")
++        ) {
++          const g = 0.05 * 39.37;
++          P.__r2corpo = { x: x0 - rr - g, y: y0 - rr - g, w: dx + 2 * (rr + g), h: dy + 2 * (rr + g) };
++        }
++        continue;
++      }
++    }
++    if (R2J && window.__r2ConectorCruzOff === !0) continue;
++    /*27/10/2026 (Roger mandou o print do R7370 da A2141 no FlexBV): pinos em cruz = componente girado 45°; cada pino fica onde está (é a quina do losango), com pad redondo, e o contorno vira o losango que passa pelas quinas*/ {
++      const cx = P.pins.reduce((t, q) => t + q.position.x, 0) / 4,
++        cy = P.pins.reduce((t, q) => t + q.position.y, 0) / 4,
++        g = P.pins
++          .map((q) => ({
++            q,
++            a: Math.atan2(q.position.y - cy, q.position.x - cx),
++            d: Math.hypot(q.position.x - cx, q.position.y - cy),
++          }))
++          .sort((u, v) => u.a - v.a);
++      if (g.some((u) => !(u.d > 0))) continue;
++      let mp = 1 / 0;
++      for (let k = 0; k < 4; k++) {
++        const u = g[k].q.position,
++          v = g[(k + 1) % 4].q.position;
++        mp = Math.min(mp, Math.hypot(u.x - v.x, u.y - v.y));
++      }
++      const md = Math.max(...g.map((u) => u.d)),
++        mn = Math.min(...g.map((u) => u.d));
++      if (mn < md * 0.6) continue;
++      if (R2J && g.some((u) => Math.abs(Math.sin(2 * u.a)) > 0.25)) continue;
++      const rr = R2J ? mp * 0.4 : mp * 0.3;
++      for (const u of g) {
++        const q = u.q,
++          x = q.position.x,
++          y = q.position.y;
++        q.padBounds = { minX: x - rr, minY: y - rr, maxX: x + rr, maxY: y + rr };
++        q.padShape = "round";
++        delete q.padWidth;
++        delete q.padHeight;
++        delete q.padAngleDeg;
++        delete q.padPolygon;
++        delete q.padCornerRadius;
++      }
++      const k = (R2J ? 2 : 1.6) * rr;
++      P.__r2poly = g.map((u) => [
++        cx + (u.q.position.x - cx) * (1 + k / u.d),
++        cy + (u.q.position.y - cy) * (1 + k / u.d),
++      ]);
++      P.__r2shunt = 1;
++    }
++  }
++}
++function R2faixa(ps) {
++  const n = ps.map((q) => String(q.number ?? q.name ?? "")),
++    v = n.map(Number);
++  if (n.length === 1) return n[0];
++  if (v.every((x) => Number.isFinite(x))) {
++    v.sort((a, b) => a - b);
++    if (v[v.length - 1] - v[0] === v.length - 1) return v[0] + "-" + v[v.length - 1];
++    return v.join(",");
++  }
++  return n.join(",");
++}
++function R2drmos(P) {
++  /*2R 20/10/2026 (Roger): DrMOS PQFN 31L (FDMF5822DC/FDMF5808A e iguais) desenhado como no datasheet (vista transparente). O molde é encaixado nos pinos reais (gira e espelha sozinho). Só vale se a numeração bater.*/ const pin =
++    (n) => P.pins.find((q) => String(q.number ?? q.name ?? "") === String(n));
++  const nt = (n) => {
++    const q = pin(n);
++    return q ? q.net || "" : null;
++  };
++  if (P.pins.length < 31 || P.pins.length > 34) return !1;
++  for (const n of [1, 8, 9, 15, 16, 26, 27, 31]) if (nt(n) === null) return !1;
++  const eq = (a, b) => {
++    const v = nt(a);
++    for (let n = a; n <= b; n++) if (nt(n) !== v) return !1;
++    return !0;
++  };
++  if (!eq(9, 11) || !eq(12, 15) || !eq(16, 26) || !/GND/i.test(nt(12))) return !1;
++  const TX = { 1: 1314, 2: 1257, 3: 1200, 4: 1142, 5: 1084, 6: 1026, 7: 968, 8: 910 },
++    TY = { 31: 268, 30: 326, 29: 383, 28: 440, 27: 497 },
++    src = [],
++    dst = [];
++  const key = (q) => q.position.x.toFixed(5) + "," + q.position.y.toFixed(5),
++    cnt = {};
++  for (const q of P.pins) {
++    const k = key(q);
++    cnt[k] = (cnt[k] || 0) + 1;
++  }
++  for (const n in TX) {
++    const q = pin(n);
++    if (q && cnt[key(q)] === 1) {
++      src.push([TX[n], 225]);
++      dst.push([q.position.x, q.position.y]);
++    }
++  }
++  for (const n in TY) {
++    const q = pin(n);
++    if (q && cnt[key(q)] === 1) {
++      src.push([1357, TY[n]]);
++      dst.push([q.position.x, q.position.y]);
++    }
++  }
++  if (src.length < 6) return !1;
++  const rot = (k, x, y) => {
++    if (k > 3) x = -x;
++    for (let r = 0; r < (k & 3); r++) {
++      const t = x;
++      x = -y;
++      y = t;
++    }
++    return [x, y];
++  };
++  let best = null;
++  for (let k = 0; k < 8; k++) {
++    const a = src.map((v) => rot(k, v[0], v[1])),
++      n = a.length,
++      ma = [0, 0],
++      mb = [0, 0];
++    a.forEach((v, i) => {
++      ma[0] += v[0] / n;
++      ma[1] += v[1] / n;
++      mb[0] += dst[i][0] / n;
++      mb[1] += dst[i][1] / n;
++    });
++    let num = 0,
++      den = 0;
++    a.forEach((v, i) => {
++      const ax = v[0] - ma[0],
++        ay = v[1] - ma[1];
++      num += ax * (dst[i][0] - mb[0]) + ay * (dst[i][1] - mb[1]);
++      den += ax * ax + ay * ay;
++    });
++    if (den <= 0) continue;
++    const sc = num / den;
++    if (sc <= 0) continue;
++    let e = 0;
++    a.forEach((v, i) => {
++      const x = sc * (v[0] - ma[0]) + mb[0],
++        y = sc * (v[1] - ma[1]) + mb[1];
++      e += Math.hypot(x - dst[i][0], y - dst[i][1]) ** 2;
++    });
++    e = Math.sqrt(e / n);
++    if (!best || e < best.e) best = { k, sc, ma, mb, e };
++  }
++  if (!best || best.e > best.sc * 12) return !1;
++  const T = (x, y) => {
++    const v = rot(best.k, x, y);
++    return { x: best.sc * (v[0] - best.ma[0]) + best.mb[0], y: best.sc * (v[1] - best.ma[1]) + best.mb[1] };
++  };
++  const RC = (x0, y0, x1, y1) => [
++    [x0, y0],
++    [x1, y0],
++    [x1, y1],
++    [x0, y1],
++  ];
++  const LY = { 9: 268, 10: 326, 11: 383, 12: 497, 13: 554, 14: 612, 15: 669 },
++    BX = { 16: 912, 17: 969, 18: 1026, 19: 1084, 20: 1141, 21: 1199, 22: 1256, 23: 1313 },
++    RY = { 24: 669, 25: 612, 26: 554 };
++  const VINB = [
++      [845, 254],
++      [882, 254],
++      [910, 280],
++      [1099, 280],
++      [1099, 426],
++      [910, 426],
++      [882, 398],
++      [882, 282],
++      [845, 282],
++    ],
++    PGB = [
++      [845, 483],
++      [882, 483],
++      [882, 468],
++      [1229, 468],
++      [1229, 541],
++      [1301, 541],
++      [1301, 686],
++      [910, 686],
++      [882, 663],
++      [882, 511],
++      [845, 511],
++    ],
++    AG = [
++      [1128, 280],
++      [1280, 280],
++      [1301, 303],
++      [1301, 426],
++      [1128, 426],
++    ];
++  const pad = (n) => {
++    n = +n;
++    if (n >= 1 && n <= 8) return RC(TX[n] - 14, 199, TX[n] + 14, 240);
++    if (n >= 27 && n <= 31) return RC(1343, TY[n] - 14, 1386, TY[n] + 14);
++    if (n === 9) return VINB;
++    if (n === 12) return PGB;
++    if (LY[n]) return RC(840, LY[n] - 14, 882, LY[n] + 14);
++    if (BX[n]) return RC(BX[n] - 14, 705, BX[n] + 14, 740);
++    if (RY[n]) return RC(1343, RY[n] - 14, 1386, RY[n] + 14);
++    if (n === 32) return AG;
++    if (n === 33) return RC(1258, 470, 1301, 512);
++    return null;
++  };
++  const GRP = (n) => {
++    n = +n;
++    return n >= 9 && n <= 11 ? "vin" : n >= 12 && n <= 15 ? "pgnd" : n >= 16 && n <= 26 ? "sw" : "p" + n;
++  };
++  const plan = [],
++    gb = {};
++  for (const q of P.pins) {
++    const nn = q.number ?? q.name,
++      sh = pad(nn);
++    if (!sh) return !1;
++    const pts = sh.map((v) => T(v[0], v[1])),
++      xs = pts.map((v) => v.x),
++      ys = pts.map((v) => v.y);
++    const B = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) },
++      g = GRP(nn);
++    plan.push([q, sh, pts, B, g]);
++    const G = gb[g] || (gb[g] = { minX: 1 / 0, minY: 1 / 0, maxX: -1 / 0, maxY: -1 / 0 });
++    G.minX = Math.min(G.minX, B.minX);
++    G.minY = Math.min(G.minY, B.minY);
++    G.maxX = Math.max(G.maxX, B.maxX);
++    G.maxY = Math.max(G.maxY, B.maxY);
++  }
++  for (const [q, , , , g] of plan) {
++    const G = gb[g],
++      mx = (G.maxX - G.minX) * 0.15 + best.sc * 6,
++      my = (G.maxY - G.minY) * 0.15 + best.sc * 6;
++    if (
++      q.position.x < G.minX - mx ||
++      q.position.x > G.maxX + mx ||
++      q.position.y < G.minY - my ||
++      q.position.y > G.maxY + my
++    )
++      return !1;
++  }
++  const vis = new Set();
++  for (const [q, sh, pts, B, g] of plan) {
++    q.padBounds = B;
++    if (sh.length > 4) {
++      q.padShape = "poly";
++      q.padPolygon = pts;
++    }
++    const n = +(q.number ?? q.name);
++    if (n === 9) q.__r2lbl = "VIN 9-11";
++    else if (n === 12) q.__r2lbl = "PGND 12-15";
++    else if (n === 32) q.__r2lbl = "AGND 32";
++    else if (n === 33) q.__r2lbl = "GL 33";
++    if (vis.has(g)) q.__r2card = 0;
++    vis.add(g);
++  }
++  P.__r2shunt = 1;
++  P.__r2pads = 1;
++  P.__r2drmos = 1;
++  {
++    /*2R 24/10/2026: contorno = corpo do PQFN do molde (o retângulo do arquivo fica deslocado e cobre os vizinhos)*/ const cp =
++        RC(832, 192, 1393, 747).map((v) => T(v[0], v[1])),
++      cx = cp.map((v) => v.x),
++      cy = cp.map((v) => v.y);
++    P.__r2corpo = {
++      x: Math.min(...cx),
++      y: Math.min(...cy),
++      w: Math.max(...cx) - Math.min(...cx),
++      h: Math.max(...cy) - Math.min(...cy),
++    };
++  }
++  return !0;
++}
++function R2drmos2(P) {
++  /*2R 20/10/2026: o mesmo DrMOS PQFN 31L quando o boardview lista menos pinos (ex.: 820-01598 U7210, 19 pinos). Encaixa pelo lado dos pinos 1–8 (PWM…VIN) + o PGND da outra borda; cada pino restante cai no pad do datasheet onde ele está.*/ if (
++    P.pins.length < 12 ||
++    P.pins.length > 34
++  )
++    return !1;
++  const pin = (n) => P.pins.find((q) => String(q.number ?? q.name ?? "") === String(n));
++  const nt = (n) => {
++    const q = pin(n);
++    return q ? (q.net || "").toUpperCase() : null;
++  };
++  for (let n = 1; n <= 8; n++) if (nt(n) === null) return !1;
++  if (!/PWM/.test(nt(1)) || !/BOOT|BST/.test(nt(5)) || !/PHASE/.test(nt(7))) return !1;
++  const key = (q) => q.position.x.toFixed(5) + "," + q.position.y.toFixed(5),
++    cnt = {};
++  for (const q of P.pins) {
++    const k = key(q);
++    cnt[k] = (cnt[k] || 0) + 1;
++  }
++  const TX = { 1: 1314, 2: 1257, 3: 1200, 4: 1142, 5: 1084, 6: 1026, 7: 968, 8: 910 },
++    TY = { 31: 268, 30: 326, 29: 383, 28: 440, 27: 497 };
++  const src = [],
++    dst = [];
++  for (let n = 1; n <= 8; n++) {
++    const q = pin(n);
++    if (cnt[key(q)] !== 1) return !1;
++    src.push([TX[n], 225]);
++    dst.push([q.position.x, q.position.y]);
++  }
++  const p8 = pin(8),
++    p1 = pin(1),
++    pt = Math.hypot(p8.position.x - p1.position.x, p8.position.y - p1.position.y) / 7;
++  if (!(pt > 0)) return !1;
++  const ed = P.pins
++    .filter((q) => q.number != null || q.name != null)
++    .filter((q) => {
++      const n = +(q.number ?? q.name);
++      return (
++        !(n >= 1 && n <= 8) &&
++        cnt[key(q)] === 1 &&
++        P.pins.some(
++          (r) =>
++            r !== q &&
++            cnt[key(r)] === 1 &&
++            Math.abs(Math.hypot(r.position.x - q.position.x, r.position.y - q.position.y) - pt) < pt * 0.2,
++        )
++      );
++    });
++  const g28 = ed.find((q) => /GND/i.test(q.net || ""));
++  if (!g28) return !1;
++  const rot = (k, x, y) => {
++    if (k > 3) x = -x;
++    for (let r = 0; r < (k & 3); r++) {
++      const t = x;
++      x = -y;
++      y = t;
++    }
++    return [x, y];
++  };
++  const fit = (s2, d2) => {
++    let best = null;
++    for (let k = 0; k < 8; k++) {
++      const a = s2.map((v) => rot(k, v[0], v[1])),
++        n = a.length,
++        ma = [0, 0],
++        mb = [0, 0];
++      a.forEach((v, i) => {
++        ma[0] += v[0] / n;
++        ma[1] += v[1] / n;
++        mb[0] += d2[i][0] / n;
++        mb[1] += d2[i][1] / n;
++      });
++      let num = 0,
++        den = 0;
++      a.forEach((v, i) => {
++        const ax = v[0] - ma[0],
++          ay = v[1] - ma[1];
++        num += ax * (d2[i][0] - mb[0]) + ay * (d2[i][1] - mb[1]);
++        den += ax * ax + ay * ay;
++      });
++      if (den <= 0) continue;
++      const sc = num / den;
++      if (sc <= 0) continue;
++      let e = 0;
++      a.forEach((v, i) => {
++        const x = sc * (v[0] - ma[0]) + mb[0],
++          y = sc * (v[1] - ma[1]) + mb[1];
++        e += Math.hypot(x - d2[i][0], y - d2[i][1]) ** 2;
++      });
++      e = Math.sqrt(e / n);
++      if (!best || e < best.e) best = { k, sc, ma, mb, e };
++    }
++    return best;
++  };
++  const fitK = (s2, d2, k) => {
++    const a = s2.map((v) => rot(k, v[0], v[1])),
++      n = a.length,
++      ma = [0, 0],
++      mb = [0, 0];
++    a.forEach((v, i) => {
++      ma[0] += v[0] / n;
++      ma[1] += v[1] / n;
++      mb[0] += d2[i][0] / n;
++      mb[1] += d2[i][1] / n;
++    });
++    let num = 0,
++      den = 0;
++    a.forEach((v, i) => {
++      const ax = v[0] - ma[0],
++        ay = v[1] - ma[1];
++      num += ax * (d2[i][0] - mb[0]) + ay * (d2[i][1] - mb[1]);
++      den += ax * ax + ay * ay;
++    });
++    if (den <= 0) return null;
++    const sc = num / den;
++    if (sc <= 0) return null;
++    let e = 0;
++    a.forEach((v, i) => {
++      const x = sc * (v[0] - ma[0]) + mb[0],
++        y = sc * (v[1] - ma[1]) + mb[1];
++      e += Math.hypot(x - d2[i][0], y - d2[i][1]) ** 2;
++    });
++    return { k, sc, ma, mb, e: Math.sqrt(e / n) };
++  };
++  let best = null;
++  for (let k = 0; k < 8; k++) {
++    const r = fitK(src, dst, k);
++    if (!r || r.e > r.sc * 8) continue;
++    const v = rot(k, 1357, TY[28]),
++      x = r.sc * (v[0] - r.ma[0]) + r.mb[0],
++      y = r.sc * (v[1] - r.ma[1]) + r.mb[1];
++    r.d = Math.hypot(x - g28.position.x, y - g28.position.y);
++    if (!best || r.d < best.d) best = r;
++  }
++  if (!best || best.d > best.sc * 60) return !1;
++  let T = (x, y) => {
++    const v = rot(best.k, x, y);
++    return { x: best.sc * (v[0] - best.ma[0]) + best.mb[0], y: best.sc * (v[1] - best.ma[1]) + best.mb[1] };
++  };
++  let Ti = (x, y) => {
++    let u = (x - best.mb[0]) / best.sc + best.ma[0],
++      v = (y - best.mb[1]) / best.sc + best.ma[1];
++    const k = best.k;
++    for (let r = 0; r < (k & 3); r++) {
++      const t = u;
++      u = v;
++      v = -t;
++    }
++    if (k > 3) u = -u;
++    return [u, v];
++  };
++  const T0 = T,
++    Ti0b = Ti,
++    g0 = Ti0b(g28.position.x, g28.position.y),
++    KX = Math.max(0.6, Math.min(3, (g0[0] - 1314) / 43)),
++    FY = Math.max(0.8, Math.min(1.4, (g0[1] - 225) / 215));
++  const Sx = (x) => (x > 1314 ? 1314 + (x - 1314) * KX : x),
++    Sy = (y) => 225 + (y - 225) * FY,
++    SxI = (x) => (x > 1314 ? 1314 + (x - 1314) / KX : x),
++    SyI = (y) => 225 + (y - 225) / FY;
++  T = (x, y) => T0(Sx(x), Sy(y));
++  Ti = (x, y) => {
++    const r = Ti0b(x, y);
++    return [SxI(r[0]), SyI(r[1])];
++  };
++  const RC = (x0, y0, x1, y1) => [
++    [x0, y0],
++    [x1, y0],
++    [x1, y1],
++    [x0, y1],
++  ];
++  const comb = (fs, lo, hi, base, tip, vert) => {
++    /*pente: dedos fs (centro,±14) indo de base (barra) até tip*/ const o = [];
++    const sg = tip > base ? 1 : -1,
++      b2 = base + sg * 10;
++    const L = fs.slice().sort((a, b) => a - b);
++    o.push([lo, base]);
++    for (const c of L) {
++      o.push([c - 14, b2]);
++      o.push([c - 14, tip]);
++      o.push([c + 14, tip]);
++      o.push([c + 14, b2]);
++    }
++    o.push([hi, b2]);
++    o.push([hi, base]);
++    return vert ? o.map((v) => [v[1], v[0]]) : o;
++  };
++  const SH = {
++    vin: [
++      [845, 254],
++      [882, 254],
++      [910, 280],
++      [1099, 280],
++      [1099, 426],
++      [910, 426],
++      [882, 398],
++      [882, 397],
++      [845, 397],
++      [845, 369],
++      [882, 369],
++      [882, 340],
++      [845, 340],
++      [845, 312],
++      [882, 312],
++      [882, 282],
++      [845, 282],
++    ],
++    pgnd: [
++      [845, 483],
++      [882, 483],
++      [882, 468],
++      [1229, 468],
++      [1229, 541],
++      [1301, 541],
++      [1301, 686],
++      [910, 686],
++      [882, 683],
++      [845, 683],
++      [845, 655],
++      [882, 655],
++      [882, 626],
++      [845, 626],
++      [845, 598],
++      [882, 598],
++      [882, 568],
++      [845, 568],
++      [845, 540],
++      [882, 540],
++      [882, 511],
++      [845, 511],
++    ],
++    swb: comb([912, 969, 1026, 1084, 1141, 1199, 1256, 1313], 897, 1330, 699, 740, !1),
++    swr: comb([554, 612, 669], 540, 683, 1343, 1386, !0),
++    agnd: [
++      [1128, 280],
++      [1280, 280],
++      [1301, 303],
++      [1301, 426],
++      [1128, 426],
++    ],
++    gl: RC(1258, 470, 1301, 512),
++  };
++  const inBox = (sh, u, v, m) => {
++    const xs = sh.map((a) => a[0]),
++      ys = sh.map((a) => a[1]);
++    return u >= Math.min(...xs) - m && u <= Math.max(...xs) + m && v >= Math.min(...ys) - m && v <= Math.max(...ys) + m;
++  };
++  const plan = [];
++  for (const q of P.pins) {
++    const n = +(q.number ?? q.name);
++    let sh = null,
++      g = "";
++    if (n >= 1 && n <= 8) {
++      sh = RC(TX[n] - 14, 199, TX[n] + 14, 240);
++      sh.c = [TX[n], 225];
++      g = "e" + n;
++    } else {
++      const [u, v] = Ti(q.position.x, q.position.y);
++      let bd = 1 / 0;
++      for (const s in TY) {
++        const d = Math.hypot(u - 1357, v - TY[s]);
++        if (d < bd) {
++          bd = d;
++          if (d < 55) {
++            sh = RC(1343, TY[s] - 14, 1386, TY[s] + 14);
++            sh.c = [1357, TY[s]];
++            g = "e" + s;
++          }
++        }
++      }
++      if (!sh) {
++        let bk = null,
++          bd2 = 1 / 0;
++        for (const k of ["agnd", "gl", "vin", "pgnd", "swr", "swb"]) {
++          const xs = SH[k].map((a) => a[0]),
++            ys = SH[k].map((a) => a[1]),
++            dx = Math.max(Math.min(...xs) - u, 0, u - Math.max(...xs)),
++            dy = Math.max(Math.min(...ys) - v, 0, v - Math.max(...ys)),
++            d = Math.hypot(dx, dy) - (k === "gl" || k === "agnd" ? 6 : 0);
++          if (d < bd2) {
++            bd2 = d;
++            bk = k;
++          }
++        }
++        if (bk && bd2 < (bk === "gl" || bk === "agnd" ? 14 : 60)) {
++          sh = SH[bk];
++          g = bk;
++        }
++      }
++    }
++    if (!sh) return !1;
++    plan.push([q, sh, g]);
++  }
++  const NM = { vin: "VIN", pgnd: "PGND", swb: "SW", swr: "SW", agnd: "AGND", gl: "GL" },
++    GR = {};
++  for (const [q, , g] of plan) (GR[g] = GR[g] || []).push(q);
++  for (const [q, sh, g] of plan) {
++    let pts = sh.map((v) => T(v[0], v[1]));
++    if (g[0] === "e" && sh.c) {
++      const c = T(sh.c[0], sh.c[1]),
++        dx = q.position.x - c.x,
++        dy = q.position.y - c.y;
++      pts = pts.map((v) => ({ x: v.x + dx, y: v.y + dy }));
++    }
++    const xs = pts.map((v) => v.x),
++      ys = pts.map((v) => v.y);
++    q.padBounds = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
++    if (sh.length > 4) {
++      q.padShape = "poly";
++      q.padPolygon = pts;
++    }
++    if (NM[g]) {
++      q.__r2lbl = NM[g] + " " + R2faixa(GR[g]);
++    }
++    if (GR[g][0] !== q) q.__r2dup = 1;
++  }
++  P.__r2shunt = 1;
++  P.__r2pads = 1;
++  P.__r2drmos = 2;
++  return !0;
++}
++function R2pads(b) {
++  /*2R 20/10/2026 (Roger): «todos os pads como no componente físico» — o arquivo só traz o centro do pino; o formato é deduzido: pinos de borda em fila viram pads retangulares (com folga entre eles), vários pinos no mesmo ponto viram um pad de potência maior e pino solto no meio fica redondo. BGA (grade) continua redondo. Liga/desliga: window.__r2PadsOff*/ if (
++    !b ||
++    !b.parts ||
++    window.__r2PadsOff === !0
++  )
++    return;
++  for (const P of b.parts) {
++    if (!P || !P.pins || P.pins.length < 3 || P.__r2shunt || P.__r2pads) continue;
++    if (P.pins.some((q) => q.padBounds)) continue;
++    if (R2drmos(P) || R2drmos2(P) || R2drmosGiro(P)) continue;
++    const U = [];
++    for (const q of P.pins) {
++      let u = U.find((v) => Math.abs(v.x - q.position.x) < 1e-6 && Math.abs(v.y - q.position.y) < 1e-6);
++      if (!u) {
++        u = { x: q.position.x, y: q.position.y, n: 0, pins: [] };
++        U.push(u);
++      }
++      u.n++;
++      u.pins.push(q);
++    }
++    if (U.length < 2) continue;
++    let pt = 1 / 0;
++    for (let a = 0; a < U.length; a++) {
++      U[a].nn = 1 / 0;
++      for (let c = 0; c < U.length; c++) {
++        if (a === c) continue;
++        const d = Math.hypot(U[a].x - U[c].x, U[a].y - U[c].y);
++        if (d < U[a].nn) U[a].nn = d;
++      }
++      if (U[a].nn < pt) pt = U[a].nn;
++    }
++    if (!isFinite(pt) || pt <= 0) continue;
++    const p = pt;
++    let grade = 0;
++    for (const u of U) {
++      u.h = U.some(
++        (v) =>
++          v !== u && Math.abs(v.y - u.y) < p * 0.25 && Math.abs(v.x - u.x) > p * 0.5 && Math.abs(v.x - u.x) < p * 1.6,
++      );
++      u.v = U.some(
++        (v) =>
++          v !== u && Math.abs(v.x - u.x) < p * 0.25 && Math.abs(v.y - u.y) > p * 0.5 && Math.abs(v.y - u.y) < p * 1.6,
++      );
++      if (u.h && u.v) grade++;
++    }
++    if (grade > Math.max(4, U.length * 0.3)) continue;
++    const xs = U.map((u) => u.x),
++      ys = U.map((u) => u.y),
++      x0 = Math.min(...xs),
++      x1 = Math.max(...xs),
++      y0 = Math.min(...ys),
++      y1 = Math.max(...ys),
++      tol = p * 0.3;
++    /*2R 24/10/2026 (Roger: «trocar os pads retangulares por redondo… em todos os controladores CD321x… T1, T2, silicon»): CI com muitos pinos longe da borda (bolas em várias fileiras, ex.: CD3215/CD3217) fica com pads redondos*/ {
++      const fx = p * 0.75;
++      let dentro = 0;
++      for (const u of U) {
++        if (Math.abs(u.x - x0) > fx && Math.abs(u.x - x1) > fx && Math.abs(u.y - y0) > fx && Math.abs(u.y - y1) > fx)
++          dentro++;
++      }
++      if (dentro > Math.max(6, U.length * 0.15)) continue;
++    }
++    let nh = 0,
++      nv = 0;
++    for (const u of U) {
++      if (u.n > 1) continue;
++      if (u.h && !u.v) nh++;
++      else if (u.v && !u.h) nv++;
++    }
++    const R = (u, w, h, round) => {
++      for (const q of u.pins) {
++        q.padBounds = { minX: u.x - w / 2, minY: u.y - h / 2, maxX: u.x + w / 2, maxY: u.y + h / 2 };
++        if (round) q.padShape = "round";
++      }
++    };
++    for (const u of U) {
++      if (u.n > 1) {
++        const fx = R2faixa(u.pins);
++        u.pins.forEach((q, k) => {
++          q.__r2lbl = fx;
++          if (k) q.__r2dup = 1;
++        });
++        const r = Math.min(p * 0.36, u.nn * 0.45);
++        R(u, r * 2, r * 2, !0);
++        continue;
++      }
++      let o = null;
++      if (u.h && !u.v) o = "h";
++      else if (u.v && !u.h) o = "v";
++      else {
++        const eX = Math.abs(u.x - x0) < tol || Math.abs(u.x - x1) < tol,
++          eY = Math.abs(u.y - y0) < tol || Math.abs(u.y - y1) < tol;
++        if (eX && !eY) o = "v";
++        else if (eY && !eX) o = "h";
++        else if (eX || eY) o = nh >= nv ? "h" : "v";
++      }
++      if (!o) {
++        u.mid = 1;
++        continue;
++      }
++      const L = Math.min(p * 1.1, u.nn * 1.6),
++        S = Math.min(p * 0.56, u.nn * 0.56);
++      o === "h" ? R(u, S, L, !1) : R(u, L, S, !1);
++    }
++    const M = U.filter((u) => u.mid);
++    for (const u of M) {
++      let ok = !1;
++      if (M.length <= 2 && P.pins.length <= 12) {
++        const ob = U.filter((v) => v !== u && !v.mid)
++          .map((v) => v.pins[0].padBounds)
++          .filter(Boolean);
++        let hx = (x1 - x0) * 0.48,
++          hy = (y1 - y0) * 0.48;
++        for (const B of ob) {
++          if (B.maxX > u.x - hx && B.minX < u.x + hx) {
++            const g = B.minY > u.y ? B.minY - u.y : u.y - B.maxY;
++            if (g > 0) hy = Math.min(hy, g * 0.8);
++          }
++        }
++        for (const B of ob) {
++          if (B.maxY > u.y - hy && B.minY < u.y + hy) {
++            const g = B.minX > u.x ? B.minX - u.x : u.x - B.maxX;
++            if (g > 0) hx = Math.min(hx, g * 0.8);
++          }
++        }
++        for (const v of M) {
++          if (v !== u) {
++            const dy = Math.abs(v.y - u.y),
++              dx = Math.abs(v.x - u.x);
++            if (dy >= dx) hy = Math.min(hy, dy * 0.45);
++            else hx = Math.min(hx, dx * 0.45);
++          }
++        }
++        if (hx > p * 0.3 && hy > p * 0.2) {
++          R(u, hx * 2, hy * 2, !1);
++          ok = !0;
++        }
++      }
++      if (!ok) {
++        const r = Math.min(p * 0.36, u.nn * 0.45);
++        R(u, r * 2, r * 2, !0);
++      }
++    }
++    const BG = U.filter((u) => u.big);
++    if (BG.length) {
++      const ob = U.filter((v) => !v.big)
++          .map((v) => v.pins[0].padBounds)
++          .filter(Boolean),
++        m = p * 0.45,
++        ex = { l: x0 - m, r: x1 + m, t: y0 - m, b: y1 + m };
++      for (const u of BG) {
++        let L = p * 0.5,
++          Rr = p * 0.5,
++          T = p * 0.5,
++          Bb = p * 0.5;
++        for (let it = 0; it < 3; it++) {
++          let t = u.y - ex.t,
++            bo = ex.b - u.y;
++          for (const B of ob) {
++            if (B.maxX > u.x - L && B.minX < u.x + Rr) {
++              if (B.maxY <= u.y) t = Math.min(t, (u.y - B.maxY) * 0.82);
++              else if (B.minY >= u.y) bo = Math.min(bo, (B.minY - u.y) * 0.82);
++            }
++          }
++          for (const v of BG) {
++            if (v === u) continue;
++            const dx = Math.abs(v.x - u.x),
++              dy = Math.abs(v.y - u.y);
++            if (dy >= dx * 0.6 && dx < L + Rr) {
++              if (v.y < u.y) t = Math.min(t, dy * 0.46);
++              else bo = Math.min(bo, dy * 0.46);
++            }
++          }
++          T = t;
++          Bb = bo;
++          let l = u.x - ex.l,
++            r = ex.r - u.x;
++          for (const B of ob) {
++            if (B.maxY > u.y - T && B.minY < u.y + Bb) {
++              if (B.maxX <= u.x) l = Math.min(l, (u.x - B.maxX) * 0.82);
++              else if (B.minX >= u.x) r = Math.min(r, (B.minX - u.x) * 0.82);
++            }
++          }
++          for (const v of BG) {
++            if (v === u) continue;
++            const dx = Math.abs(v.x - u.x),
++              dy = Math.abs(v.y - u.y);
++            if (dx > dy * 0.6 || dy < (T + Bb) * 0.5) {
++              if (v.x < u.x) l = Math.min(l, dx * 0.46);
++              else if (v.x > u.x) r = Math.min(r, dx * 0.46);
++            }
++          }
++          L = l;
++          Rr = r;
++        }
++        const mn = p * 0.3;
++        L = Math.max(L, mn);
++        Rr = Math.max(Rr, mn);
++        T = Math.max(T, mn);
++        Bb = Math.max(Bb, mn);
++        for (const q of u.pins) q.padBounds = { minX: u.x - L, minY: u.y - T, maxX: u.x + Rr, maxY: u.y + Bb };
++      }
++    }
++    P.__r2shunt = 1;
++    P.__r2pads = 1;
++  }
++}
++/*2R 24/10/2026 22h (Roger: «alguns BDV não têm o contorno externo» → «1» e «quando não achar uma similar, entra a opção 2»): arquivo que traz só o retângulo (ou nada) de contorno → 1) procura uma placa parecida na biblioteca window.__r2Contornos (r2-contornos.js: contorno real + componentes de referência) e encaixa pelo nome e posição dos componentes; 2) sem parecida, desenha um contorno aproximado pelos pinos. window.__r2ContornoOff=true desliga*/ function R2contorno(
++  b,
++) {
++  try {
++    if (!b || b.__r2ct || window.__r2ContornoOff === !0 || !b.parts || !b.parts.length) return;
++    b.__r2ct = 1;
++    const o = b.outline || [],
++      bb = b.bounds;
++    const caixa =
++      o.length === 0 ||
++      (o.length <= 5 &&
++        new Set(o.map((q) => Math.round(q.x))).size <= 2 &&
++        new Set(o.map((q) => Math.round(q.y))).size <= 2);
++    if (!caixa) return;
++    let xs = [],
++      ys = [];
++    const cen = {};
++    for (const P of b.parts) {
++      if (!P.pins || !P.pins.length) continue;
++      let x = 0,
++        y = 0;
++      for (const q of P.pins) {
++        x += q.position.x;
++        y += q.position.y;
++        xs.push(q.position.x);
++        ys.push(q.position.y);
++      }
++      cen[P.name] = [x / P.pins.length, y / P.pins.length, P.pins.length];
++    }
++    if (xs.length < 20) return;
++    const X0 = Math.min(...xs),
++      X1 = Math.max(...xs),
++      Y0 = Math.min(...ys),
++      Y1 = Math.max(...ys),
++      diag = Math.hypot(X1 - X0, Y1 - Y0);
++    const rot = (k, x, y) => {
++      if (k > 3) x = -x;
++      for (let r = 0; r < (k & 3); r++) {
++        const t = x;
++        x = -y;
++        y = t;
++      }
++      return [x, y];
++    };
++    let melhor = null;
++    const L = window.__r2Contornos || {};
++    for (const nome in L) {
++      const E = L[nome],
++        A = [],
++        B = [];
++      for (const n in E.a) {
++        const c = cen[n];
++        if (c && c[2] === E.a[n][2]) {
++          A.push([E.a[n][0], E.a[n][1]]);
++          B.push([c[0], c[1]]);
++        }
++      }
++      if (A.length < 40) continue;
++      for (let k = 0; k < 8; k++) {
++        const R = A.map((v) => rot(k, v[0], v[1]));
++        let idx = R.map((_, i) => i),
++          sc = 0,
++          ma,
++          mb,
++          res;
++        for (let it = 0; it < 4; it++) {
++          ma = [0, 0];
++          mb = [0, 0];
++          for (const i of idx) {
++            ma[0] += R[i][0];
++            ma[1] += R[i][1];
++            mb[0] += B[i][0];
++            mb[1] += B[i][1];
++          }
++          ma = [ma[0] / idx.length, ma[1] / idx.length];
++          mb = [mb[0] / idx.length, mb[1] / idx.length];
++          let nu = 0,
++            de = 0;
++          for (const i of idx) {
++            const ax = R[i][0] - ma[0],
++              ay = R[i][1] - ma[1];
++            nu += ax * (B[i][0] - mb[0]) + ay * (B[i][1] - mb[1]);
++            de += ax * ax + ay * ay;
++          }
++          sc = de > 0 ? nu / de : 0;
++          if (sc <= 0) break;
++          res = R.map((v, i) =>
++            Math.hypot(sc * (v[0] - ma[0]) + mb[0] - B[i][0], sc * (v[1] - ma[1]) + mb[1] - B[i][1]),
++          );
++          idx = res
++            .map((r, i) => [r, i])
++            .sort((a, c) => a[0] - c[0])
++            .slice(0, Math.max(30, Math.floor(res.length * 0.6)))
++            .map((t) => t[1]);
++        }
++        if (sc <= 0) continue;
++        const ord = [...res].sort((a, c) => a - c),
++          med = ord[Math.floor(ord.length / 2)] / diag,
++          boa = res.filter((r) => r < diag * 0.005).length / res.length;
++        if (med < 0.003 && boa >= 0.5 && (!melhor || med < melhor.med)) melhor = { nome, k, sc, ma, mb, med, boa };
++      }
++    }
++    if (melhor) {
++      const E = L[melhor.nome],
++        m = melhor;
++      b.outline = E.o.map((v) => {
++        const r = rot(m.k, v[0], v[1]);
++        return { x: m.sc * (r[0] - m.ma[0]) + m.mb[0], y: m.sc * (r[1] - m.ma[1]) + m.mb[1] };
++      });
++      b.__r2contorno = { tipo: "similar", fonte: m.nome, acerto: Math.round(m.boa * 100) };
++    } else {
++      /* opção 2: contorno aproximado — grade dos pinos, fecha os vãos e contorna a borda */ const N = 140,
++        cs = Math.max(X1 - X0, Y1 - Y0) / N,
++        W = Math.ceil((X1 - X0) / cs) + 7,
++        H = Math.ceil((Y1 - Y0) / cs) + 7,
++        g = new Uint8Array(W * H),
++        at = (x, y) => y * W + x;
++      for (let i = 0; i < xs.length; i++) {
++        const gx = Math.floor((xs[i] - X0) / cs) + 3,
++          gy = Math.floor((ys[i] - Y0) / cs) + 3;
++        g[at(gx, gy)] = 1;
++      }
++      const dil = (src, r) => {
++          const d = new Uint8Array(W * H);
++          for (let y = 0; y < H; y++)
++            for (let x = 0; x < W; x++)
++              if (src[at(x, y)])
++                for (let j = -r; j <= r; j++)
++                  for (let i = -r; i <= r; i++) {
++                    const u = x + i,
++                      v = y + j;
++                    u >= 0 && v >= 0 && u < W && v < H && (d[at(u, v)] = 1);
++                  }
++          return d;
++        },
++        ero = (src, r) => {
++          const d = new Uint8Array(W * H);
++          for (let y = 0; y < H; y++)
++            for (let x = 0; x < W; x++) {
++              let ok = 1;
++              for (let j = -r; j <= r && ok; j++)
++                for (let i = -r; i <= r; i++) {
++                  const u = x + i,
++                    v = y + j;
++                  if (u < 0 || v < 0 || u >= W || v >= H || !src[at(u, v)]) {
++                    ok = 0;
++                    break;
++                  }
++                }
++              d[at(x, y)] = ok;
++            }
++          return d;
++        };
++      let G = ero(dil(g, 3), 2);
++      const fora = new Uint8Array(W * H),
++        st = [0];
++      fora[0] = 1;
++      while (st.length) {
++        const c = st.pop(),
++          x = c % W,
++          y = (c - x) / W;
++        for (const [u, v] of [
++          [x + 1, y],
++          [x - 1, y],
++          [x, y + 1],
++          [x, y - 1],
++        ])
++          if (u >= 0 && v >= 0 && u < W && v < H && !fora[at(u, v)] && !G[at(u, v)]) {
++            fora[at(u, v)] = 1;
++            st.push(at(u, v));
++          }
++      }
++      for (let i = 0; i < W * H; i++) if (!fora[i]) G[i] = 1;
++      let sx = -1,
++        sy = -1;
++      for (let y = 0; y < H && sx < 0; y++)
++        for (let x = 0; x < W; x++)
++          if (G[at(x, y)]) {
++            sx = x;
++            sy = y;
++            break;
++          }
++      if (sx < 0) return;
++      const pts = [],
++        dirs = [
++          [1, 0],
++          [0, 1],
++          [-1, 0],
++          [0, -1],
++        ],
++        on = (x, y) => x >= 0 && y >= 0 && x < W && y < H && G[at(x, y)] === 1;
++      let x = sx,
++        y = sy,
++        d = 0,
++        n = 0;
++      do {
++        pts.push([x, y]);
++        let achou = !1;
++        for (let t = 0; t < 4; t++) {
++          const nd = (d + 3 + t) % 4,
++            u = x + dirs[nd][0],
++            v = y + dirs[nd][1];
++          if (on(u, v)) {
++            x = u;
++            y = v;
++            d = nd;
++            achou = !0;
++            break;
++          }
++        }
++        if (!achou) break;
++        n++;
++      } while ((x !== sx || y !== sy) && n < W * H * 4);
++      const simp = [];
++      for (let i = 0; i < pts.length; i++) {
++        const a = pts[(i - 1 + pts.length) % pts.length],
++          c = pts[i],
++          e = pts[(i + 1) % pts.length];
++        if ((c[0] - a[0]) * (e[1] - c[1]) - (c[1] - a[1]) * (e[0] - c[0]) !== 0) simp.push(c);
++      }
++      if (simp.length < 4) return;
++      b.outline = simp.map((v) => ({ x: X0 + (v[0] - 3 + 0.5) * cs, y: Y0 + (v[1] - 3 + 0.5) * cs }));
++      b.outline.push({ ...b.outline[0] });
++      b.__r2contorno = { tipo: "aproximado" };
++    }
++    window.__r2UltimoContorno = b.__r2contorno;
++    try {
++      const msg =
++        b.__r2contorno.tipo === "similar"
++          ? `Contorno da placa vindo da ${b.__r2contorno.fonte} (placa parecida, ${b.__r2contorno.acerto}% dos componentes no mesmo lugar) — o arquivo não traz o contorno real.`
++          : "Contorno aproximado pelos componentes — o arquivo não traz o contorno real e não há placa parecida na biblioteca.";
++      setTimeout(() => {
++        try {
++          U.addToast(msg, "info", void 0, 7e3);
++        } catch {}
++      }, 400);
++    } catch {}
++  } catch (e) {}
++}
++
++export { R2centro, R2viz, R2tam, R2lado, R2mira, R2raio, R2rEf, R2caixa, R2claro, R2drmosGiro, R2margem, R2pk, R2grande, R2uf, R2kf, R2cap4, R2gira, R2shunt, R2faixa, R2drmos, R2drmos2, R2pads, R2contorno };
+diff --git a/src/frontend/src/r2/search-sync.ts b/src/frontend/src/r2/search-sync.ts
+index 9ff4f724..54b8eb14 100644
+--- a/src/frontend/src/r2/search-sync.ts
++++ b/src/frontend/src/r2/search-sync.ts
+@@ -5,14 +5,35 @@ import { boardStore } from '../store/board-store';
+ import { pdfStore } from '../store/pdf-store';
+ import { fileInputRefs } from '../store/file-inputs';
+ import { IS_2R } from './env';
++import { r2BuscaExata, r2Match } from './loose-match';
++
++/* 2R 26/10/2026: busca Exata | Geral — window.__r2BuscaExata.get('bdv'|'pdf') / .set(k, v) (index.html usa) */
++(window as unknown as Record<string, unknown>).__r2BuscaExata = {
++  get: r2BuscaExata,
++  set(k: 'bdv' | 'pdf', v: boolean) {
++    try { localStorage.setItem('2r-busca-exata-' + k, v ? '1' : '0'); } catch { /* */ }
++    if (k === 'bdv') {
++      try { (boardStore as unknown as { _cachedSearchQuery: string | null })._cachedSearchQuery = null; boardStore.r2Notify(); } catch { /* */ }
++    } else {
++      try {
++        const d = (pdfStore as unknown as { _active?: { searchQuery?: string } })._active;
++        if (d && d.searchQuery) pdfStore.searchText(d.searchQuery, 'lookup');
++      } catch { /* */ }
++    }
++    window.dispatchEvent(new Event('2r-busca-exata'));
++  },
++};
++(window as unknown as Record<string, unknown>).__r2sd = (i: string, e: string | string[]) => r2Match(i, e);
+ 
+ let busy = false;      // evita ida e volta infinita (placa → PDF → placa…)
+ 
++/* 2R 26/10/2026 (Roger: «quero um search no BDV e outro para o PDF… para não misturar»): buscar junto começa
++   DESLIGADO (chave nova «2r-search-sync2»); liga em Configurações */
+ export function searchSyncOn(): boolean {
+-  try { return IS_2R && localStorage.getItem('2r-search-sync') !== '0'; } catch { return IS_2R; }
++  try { return IS_2R && localStorage.getItem('2r-search-sync2') === '1'; } catch { return false; }
+ }
+ export function setSearchSync(on: boolean) {
+-  try { localStorage.setItem('2r-search-sync', on ? '1' : '0'); } catch { /* */ }
++  try { localStorage.setItem('2r-search-sync2', on ? '1' : '0'); } catch { /* */ }
+   window.dispatchEvent(new Event('2r-search-sync'));
+ }
+ 
+diff --git a/src/frontend/src/renderer/board-scene.ts b/src/frontend/src/renderer/board-scene.ts
+index 0badfdad..e4f67a16 100644
+--- a/src/frontend/src/renderer/board-scene.ts
++++ b/src/frontend/src/renderer/board-scene.ts
+@@ -42,6 +42,10 @@ import { pushLabel, sortLabelModel, inkOn, haloFor, type LabelModel, type LabelR
+ import { capsuleParams, isOblongRoundPad, capsuleGrowForRadius, type CapsuleParams } from './pad-capsule';
+ import { defaultLayerColor } from '../store/layer-store';
+ import { themeStore, hexToInt } from '../store/themes';
++import { r2PadsColoridos, r2Mesa, r2XwOculto } from '../r2/hand-flags';
++import { R2centro, R2viz, R2caixa, R2claro, R2pk, R2grande, R2kf, R2cap4, R2gira, R2shunt, R2pads, R2contorno } from '../r2/hand-geom';
++/* eslint-disable @typescript-eslint/no-explicit-any */
++const r2win = window as any;
+ 
+ /**
+  * Themed color constants used throughout the renderer. Theme-driven entries
+@@ -50,7 +54,7 @@ import { themeStore, hexToInt } from '../store/themes';
+  * literals (palette entries that are not theme slots) stay as plain numbers.
+  */
+ export const BOARD_COLORS = {
+-  get background()         { return hexToInt(themeStore.activeTheme().board.canvasBackground); },
++  get background()         { return hexToInt(r2Mesa(themeStore.activeTheme().board.canvasBackground)); },
+   get outline()            { return hexToInt(themeStore.activeTheme().board.outline); },
+   get netHighlight()       { return hexToInt(themeStore.activeTheme().board.selection); },
+   get butterflySelection() { return hexToInt(themeStore.activeTheme().board.butterflySelection); },
+@@ -62,16 +66,16 @@ export const BOARD_COLORS = {
+   get netLabelBg()         { return hexToInt(themeStore.activeTheme().board.netLabelBg ?? '#000000'); },
+   get netLabelBgAlpha()    { return themeStore.activeTheme().board.netLabelBgOpacity ?? 0.6; },
+   get boardFillDefault()   { return hexToInt(themeStore.activeTheme().board.boardFill); },
+-  // Part borders: a palette theme sets its own; Default keeps green / red.
+-  get partBoundsTop()      { return hexToInt(themeStore.activeTheme().board.partOutlineTop ?? '#336633'); },
+-  get partBoundsBottom()   { return hexToInt(themeStore.activeTheme().board.partOutlineBottom ?? '#663333'); },
+-  // Palette entries below are not theme slots — they remain static.
++  // Palette entries below are not theme slots in v1 — they remain static.
++  // 2R 20/10/2026: contorno discreto, igual nos dois lados
++  partBoundsTop:     2434092,
++  partBoundsBottom:  2434092,
+   /** Parts whose position was inferred from routing rather than read from the
+    *  file (`Part.placementInferred`). Amber and dashed so it can never be
+    *  mistaken for real placement data. */
+-  partBoundsInferred: 0xB8860B,
++  partBoundsInferred: 2434092,
+   partSelected:      0xffaa00,
+-  pin1:              0xcc2222,
++  pin1:              r2PadsColoridos() ? 0xcc2222 : 9081244,
+ };
+ 
+ const LABEL_FONT_FAMILY = 'monospace';
+@@ -439,6 +443,8 @@ export function drawPadShape(gfx: Graphics, p: PadGeometry, grow = 0): void {
+ /** Border rectangle data for batched redraw */
+ export interface BorderRect {
+   x: number; y: number; w: number; h: number;
++  /** 2R 20/10/2026: cor própria do contorno (cor do componente um tom mais claro; CI em branco) */
++  c?: number;
+   /** If set, draw this polygon instead of the axis-aligned rect (for diagonal parts) */
+   poly?: [number, number][];
+ }
+@@ -803,7 +809,9 @@ export function drawOutlineDebug(container: Container, board: BoardData): Array<
+ /** Redraw batched border Graphics with an effective minimum width — 2 draw calls total */
+ export function updateBorderWidths(batches: BorderBatch[], configuredWidth: number, viewportScale: number): void {
+   const minScreenPx = 1;
+-  const effectiveWidth = Math.max(configuredWidth, minScreenPx / viewportScale);
++  // 2R 24/10/2026 (Roger: «deixar uma microlinha só pra limitar o componente»): contorno sempre fino na tela (~0,8 px),
++  // em qualquer zoom; window.__r2BordaGrossa=true volta ao antigo
++  const effectiveWidth = r2win.__r2BordaGrossa ? Math.max(configuredWidth, minScreenPx / viewportScale) : 0.8 / viewportScale;
+ 
+   // Check first batch to skip redundant redraws (2% relative tolerance).
+   if (batches.length > 0 && Math.abs(effectiveWidth - batches[0].lastWidth) / Math.max(effectiveWidth, 0.001) < 0.02) {
+@@ -828,6 +836,7 @@ export function updateBorderWidths(batches: BorderBatch[], configuredWidth: numb
+       } else {
+         batch.gfx.rect(r.x, r.y, r.w, r.h);
+       }
++      if (r.c != null && !batch.dashed) batch.gfx.stroke({ width: effectiveWidth, color: r.c, alpha: Math.max(batch.alpha, 0.85) });
+     }
+     batch.gfx.stroke({ width: effectiveWidth, color: batch.color, alpha: batch.alpha });
+   }
+@@ -864,6 +873,8 @@ export function buildBoardScene(
+   // rotated by `BoardRenderer.applyFlips`, so a pin run that varies in board Y
+   // is what the user sees as a horizontal row — and that's the run that needs
+   // the label stagger.
++  // 2R 20/10 a 27/10/2026: contorno externo, shunt/cristal/conector, capacitor de 4 terminais, pads físicos, CI girado
++  R2contorno(board); R2shunt(board); R2cap4(board); R2pads(board); R2gira(board);
+   const rot90 = ((Math.round(viewRotationDeg / 90) % 4) + 4) % 4;
+   const axesSwapped = rot90 === 1 || rot90 === 3;
+   // Sign that turns "even → visually above the pin" into a board-space offset.
+@@ -1429,7 +1440,7 @@ export function buildBoardScene(
+       const ratio = Math.min(dx, dy) / (Math.max(dx, dy) || 1);
+       return ratio > 0.4;
+     })();
+-    const isTwoPinPart = part.pins.length === 2 && !isDiag2Pin;
++    const isTwoPinPart = (part.pins.length === 2 && !isDiag2Pin) || (part as any).__r2shunt === 1;
+     // Single-pin parts (testpoints, fiducials, standalone pads) have a
+     // degenerate `eb`: computePartGeometry bounds the pin *centres*, so one pin
+     // gives a zero-size box and computeEffectiveBounds' inflate branch needs
+@@ -1579,6 +1590,23 @@ export function buildBoardScene(
+           padRx = eb.px; padRy = pin.position.y - padDepth / 2;
+           padRw = eb.pw; padRh = padDepth;
+         }
++        // 2R 27/10 08h02 (Roger: «esqueceu de diminuir os pads proporcionalmente»): pad do capacitor de 2 pinos estreita
++        // na mesma proporção do corpo, centrado
++        const PKp = !useRealBounds ? R2pk(part) : null;
++        if (PKp) {
++          if (PKp.h) { padRx = pin.position.x - PKp.tl / 2; padRw = PKp.tl; padRy = PKp.cy - PKp.W / 2; padRh = PKp.W; }
++          else { padRy = pin.position.y - PKp.tl / 2; padRh = PKp.tl; padRx = PKp.cx - PKp.W / 2; padRw = PKp.W; }
++        } else if (!useRealBounds && r2win.__r2CapFino !== 1 && part.pins.length === 2 && /^[CFL]/i.test(part.name || '')
++          && (R2grande(part) || /^L/i.test(part.name || ''))) {
++          const kf = R2kf(part);
++          if (eb.horiz) { padRy += (padRh * (1 - kf)) / 2; padRh *= kf; } else { padRx += (padRw * (1 - kf)) / 2; padRw *= kf; }
++          if (/^L/i.test(part.name || '')) {
++            // bobina: pad 10% mais curto e puxado para dentro, junto com o corpo 10% mais curto
++            const a0 = part.pins[0].position, a1 = part.pins[1].position, mx = (a0.x + a1.x) / 2, my = (a0.y + a1.y) / 2;
++            if (eb.horiz) { const c0 = padRx + padRw / 2, c1 = mx + (c0 - mx) * 0.9; padRw *= 0.9; padRx = c1 - padRw / 2; }
++            else { const c0 = padRy + padRh / 2, c1 = my + (c0 - my) * 0.9; padRh *= 0.9; padRy = c1 - padRh / 2; }
++          }
++        }
+         const cx = padRx + padRw / 2;
+         const cy = padRy + padRh / 2;
+         const targetGfx = isNcPin
+@@ -1688,8 +1716,8 @@ export function buildBoardScene(
+       // Multi-pin (BGA/IC): always shown when showPinNumbers is on.
+       // 2-pin: shown when showTwoPinNumbers is on — sized to fit the pad rectangle.
+       // NC pins skip labels entirely — no useful info, saves draw calls.
+-      if (((isMultiPin && showPinNumbers) || twoPinShowNum) && !isNcPin) {
+-        const numStr = pinDisplayId(pin, pni);
++      if (((isMultiPin && showPinNumbers) || twoPinShowNum) && !isNcPin && !(pin as any).__r2dup) {
++        const numStr = (pin as any).__r2lbl || pinDisplayId(pin, pni);
+         let pinFontSize: number;
+         let pinX: number, pinY: number;
+         let numAnchorY = 0.5;
+@@ -1759,7 +1787,7 @@ export function buildBoardScene(
+             ...numHalo,
+             ...(numInk !== null ? { inkColor: numInk } : {}),
+             alt: numAlt,
+-            pitch: minPinSpacing < Infinity ? minPinSpacing : undefined,
++            pitch: (pin as any).__r2lbl ? undefined : minPinSpacing < Infinity ? minPinSpacing : undefined,
+             stacked: bgaAlternate,
+             ...(numRot ? { rot: numRot } : {}),
+           };
+@@ -2017,6 +2045,64 @@ export function buildBoardScene(
+         fillX = eb.px; fillY = eb.py; fillW = eb.pw; fillH = eb.ph;
+         fillPoly = obb ?? null;
+       }
++      // ── 2R 24/10 a 27/10/2026: contornos dos componentes (ver r2/hand-geom.ts) ──
++      const P2 = part as any;
++      {
++        const Q2 = R2caixa(part, borderRect);
++        if (Q2 !== borderRect) { borderRect = Q2; fillX = Q2.x; fillY = Q2.y; fillW = Q2.w; fillH = Q2.h; fillPoly = null; }
++      }
++      if (P2.__r2poly) {
++        const X = P2.__r2poly.map((v: number[]) => v[0]), Y = P2.__r2poly.map((v: number[]) => v[1]);
++        fillX = Math.min(...X); fillY = Math.min(...Y); fillW = Math.max(...X) - fillX; fillH = Math.max(...Y) - fillY;
++        borderRect = { x: fillX, y: fillY, w: fillW, h: fillH, poly: P2.__r2poly };
++        fillPoly = P2.__r2poly;
++      }
++      if (P2.__r2drmos && !P2.__r2corpo && !P2.__r2gira) {
++        let a0 = Infinity, b0 = Infinity, a1 = -Infinity, b1 = -Infinity;
++        for (const q of part.pins) {
++          const pb = q.padBounds;
++          if (!pb) continue;
++          a0 = Math.min(a0, pb.minX); b0 = Math.min(b0, pb.minY); a1 = Math.max(a1, pb.maxX); b1 = Math.max(b1, pb.maxY);
++        }
++        if (isFinite(a0)) {
++          const mg = Math.max(a1 - a0, b1 - b0) * 0.03;
++          P2.__r2corpo = { x: a0 - mg, y: b0 - mg, w: a1 - a0 + 2 * mg, h: b1 - b0 + 2 * mg };
++        }
++      }
++      if (P2.__r2corpo && !r2win.__r2CorpoOff && !P2.__r2gira) {
++        const C2 = P2.__r2corpo;
++        borderRect = { ...borderRect, x: C2.x, y: C2.y, w: C2.w, h: C2.h };
++        delete borderRect.poly;
++        fillX = C2.x; fillY = C2.y; fillW = C2.w; fillH = C2.h; fillPoly = null;
++      }
++      // 2R 27/10/2026 07h51 (Roger: «os capacitores estão mais gordinhos, pode diminuir uns 15% na largura deles»)
++      {
++        const PK = !fillPoly && !borderRect.poly ? R2pk(part) : null;
++        if (PK) {
++          const Lx = Math.max(PK.L, 0), w = PK.h ? Lx : PK.W, h = PK.h ? PK.W : Lx;
++          fillX = PK.cx - w / 2; fillY = PK.cy - h / 2; fillW = w; fillH = h;
++          borderRect = { ...borderRect, x: fillX, y: fillY, w: fillW, h: fillH };
++          P2.__r2pkOk = 1;
++        } else P2.__r2pkOk = 0;
++      }
++      if (!P2.__r2pkOk && r2win.__r2CapFino !== 1 && !fillPoly && !borderRect.poly && part.pins && part.pins.length === 2
++        && /^[CFLY]/i.test(part.name || '') /* 08h31: fusível também; 10h17: cristal Y */
++        && part.pins[0].position && part.pins[1].position && (R2grande(part) || /^[LY]/i.test(part.name || ''))) {
++        const kf = R2kf(part), kl = /^[LY]/i.test(part.name || '') ? 0.9 : 1;
++        const dX = Math.abs(part.pins[0].position.x - part.pins[1].position.x), dY = Math.abs(part.pins[0].position.y - part.pins[1].position.y);
++        if (dX >= dY) {
++          const n2 = fillH * kf; fillY += (fillH - n2) / 2; fillH = n2;
++          const l2 = fillW * kl; fillX += (fillW - l2) / 2; fillW = l2;
++        } else {
++          const n2 = fillW * kf; fillX += (fillW - n2) / 2; fillW = n2;
++          const l2 = fillH * kl; fillY += (fillH - l2) / 2; fillH = l2;
++        }
++        borderRect = { ...borderRect, x: fillX, y: fillY, w: fillW, h: fillH };
++      }
++      P2.__r2box = { x: fillX, y: fillY, w: fillW, h: fillH, poly: fillPoly };
++      // 2R 20/10/2026: contorno na cor do componente, um tom mais claro; CI (mais de 4 pinos) em branco
++      if (s.showComponentColors && override?.color) borderRect.c = R2claro(override.color) ?? undefined;
++      if (part.pins.length > 4 && r2win.__r2CiBranco !== false) borderRect.c = 16777215;
+       // Mechanical / sent-to-back parts: skip the border too. FlexBV renders
+       // shields/heatsinks as nothing but the pin placeholders, and a giant
+       // border outline on a DIMM-shadow or shield frame is still visually
+@@ -2058,7 +2144,7 @@ export function buildBoardScene(
+     // reading exists": 574 of those 2346 pins carry one, and leaving the other
+     // 1772 named would make visible text ambiguous (is `N1530_1` a designator
+     // or a measurement?) and read as a bug rather than a rule.
+-    if (s.showPartLabels && !padsOnly && !(diodeOnly && isSinglePin)) {
++    if (s.showPartLabels && !padsOnly && !(diodeOnly && isSinglePin) && (!r2win.__2rLabelRe || r2win.__2rLabelRe.test(part.name))) {
+       let fontSize: number;
+       if (isSinglePin) {
+         // Size against the pad, not the zero-width `eb`. Same fit formula the
+@@ -2489,10 +2575,12 @@ export function buildBoardScene(
+         const pin = part.pins[dpni];
+         const r = diodeResolver(pin);
+         if (!r || r.kind === 'none') continue;
++        if (r2XwOculto(part) || (pin as any).__r2dup || (pin as any).__r2card === 0) continue;
++        // 2R 27/10/2026 08h37 (Roger: «nos cards é pra ter somente modo diodo…»): leitura junta → só o 1º valor no card do pad
+         const text = r.kind === 'open'
+           ? 'OL'
+           : r.mv === 0 ? '0'
+-          : (r.mv != null ? (r.mv / 1000).toFixed(3) : r.raw);
++          : (r.mv != null ? (r.mv / 1000).toFixed(3) : (String(r.raw).trim().split(/\s+/)[0] || r.raw));
+         const radius = computePinRadius(s, pin.radius);
+         const color = diodeReadingColor(r);
+         // Small but legible. NOT quantizeFontSize'd — its steps jump 4→6, so a
+@@ -2517,6 +2605,9 @@ export function buildBoardScene(
+           fontSize, color, kind: 'diode', partIndex: dpi, pinIndex: dpni,
+           anchorX: 0.5, anchorY,       // mirrors label.anchor.set below
+           bg: diodeOnly,               // dark plate: colour must read over any pin fill
++          // 2R 20/10/2026: dados do card do diodo (ao lado/dentro do pad)
++          pad: radius, net: pin.net, px: pin.position.x, py: pin.position.y,
++          cx: (part as any).__r2cx ?? R2centro(part, 0), cy: (part as any).__r2cy ?? R2centro(part, 1), nn: R2viz(part, pin),
+         }))) {
+           const label = new BitmapText({
+             text,
+diff --git a/src/frontend/src/renderer/label-model.ts b/src/frontend/src/renderer/label-model.ts
+index 12746b3a..74417003 100644
+--- a/src/frontend/src/renderer/label-model.ts
++++ b/src/frontend/src/renderer/label-model.ts
+@@ -13,6 +13,8 @@
+ export type LabelKind = 'part' | 'pinNum' | 'pinNet' | 'circleNum' | 'circleNet' | 'twoPinNet' | 'diode';
+ 
+ export interface LabelRecord {
++  /** 2R 20/10/2026 (cards do diodo): raio do pad na tela, net, posição do pino, centro do componente e distância ao pino vizinho */
++  pad?: number; net?: string; px?: number; py?: number; cx?: number; cy?: number; nn?: number;
+   x: number; y: number;          // board/scene coords (same space BitmapText.x/y used)
+   text: string;
+   fontSize: number;              // same pre-quantization size the BitmapText would get
+diff --git a/src/frontend/src/store/board-store.ts b/src/frontend/src/store/board-store.ts
+index 6288ee46..3857e86f 100644
+--- a/src/frontend/src/store/board-store.ts
++++ b/src/frontend/src/store/board-store.ts
+@@ -995,6 +995,7 @@ class BoardStore extends Emitter {
+ 
+   /** 2R: muda a aba ativa de fora (lado da placa no ponto a ponto / duplo clique no PDF) e avisa. */
+   r2Patch(patch: Partial<BoardTab>) { this.updateActiveTab(patch); this.notify(); }
++  r2Notify() { this.notify(); }
+ 
+   private updateActiveTab(patch: Partial<BoardTab>) {
+     const tab = this.activeTab;
+-- 
+2.43.0
+

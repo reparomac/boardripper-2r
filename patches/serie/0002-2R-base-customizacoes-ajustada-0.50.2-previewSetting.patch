@@ -1,0 +1,33 @@
+From 69fe94b81fe53fe6491fb453829ad3a4b76ea2fe Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:49:52 -0300
+Subject: [PATCH 02/22] =?UTF-8?q?2R:=20base=20customizacoes=20ajustada=20?=
+ =?UTF-8?q?=C3=A0=200.50.2=20(previewSettings)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/frontend/src/panels/SettingsPanel.tsx | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/frontend/src/panels/SettingsPanel.tsx b/src/frontend/src/panels/SettingsPanel.tsx
+index 3c2ae51b..16049b1d 100644
+--- a/src/frontend/src/panels/SettingsPanel.tsx
++++ b/src/frontend/src/panels/SettingsPanel.tsx
+@@ -1843,9 +1843,10 @@ export function SettingsPanel() {
+   // onde é» — no 2R cada mudança aparece na placa na hora (Apply grava, Cancelar volta).
+   useEffect(() => {
+     if (!IS_2R || !dirty) return;
+-    renderSettingsStore.applySettings(draft);
++    // 0.50.2: applySettings virou previewSettings(settings, camada) — o tema fica por cima, sem gravar a paleta
++    renderSettingsStore.previewSettings(draft, isBoardMode ? 'board' : 'global');
+     setPreviewing(true);
+-  }, [draft, dirty]);
++  }, [draft, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+   const previewingRef = useRef(previewing);
+   previewingRef.current = previewing;
+   // What the draft stands for: global⊕board in board mode, global otherwise.
+-- 
+2.43.0
+

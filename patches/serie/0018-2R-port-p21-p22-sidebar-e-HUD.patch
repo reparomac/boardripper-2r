@@ -1,0 +1,133 @@
+From 1b1901e353dfff4d2ee33a725012fed70f609970 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:43:17 -0300
+Subject: [PATCH 18/22] 2R port p21-p22 sidebar e HUD
+
+---
+ src/frontend/src/components/GuideHud.tsx | 42 +++++++++++++++++++-----
+ src/frontend/src/components/Sidebar.tsx  | 25 +++++++++++---
+ 2 files changed, 55 insertions(+), 12 deletions(-)
+
+diff --git a/src/frontend/src/components/GuideHud.tsx b/src/frontend/src/components/GuideHud.tsx
+index c624d9f8..0725dc50 100644
+--- a/src/frontend/src/components/GuideHud.tsx
++++ b/src/frontend/src/components/GuideHud.tsx
+@@ -3,6 +3,14 @@ import { guideStore } from '../r2/guide-store';
+ import { useBoardStore } from '../hooks/useBoardStore';
+ import { boardStore } from '../store/board-store';
+ import { bgaBall } from '../r2/bga';
++import { jsx as r2jsx, jsxs as r2jsxs, Fragment as R2Frag } from 'react/jsx-runtime';
++const R2D = { jsx: r2jsx, jsxs: r2jsxs, Fragment: R2Frag };
++type GInfo = { gn: number; gk: number; gm: number; nome?: string; cor: string; novo?: boolean };
++const r2h = window as unknown as {
++  __r2rp?: { on: boolean };
++  __r2GInfo?: (a: unknown, i: number) => GInfo | null;
++  __r2Notes?: (d: unknown, note: string, cls: string, hud?: boolean) => React.ReactNode;
++};
+ 
+ /** 2R Tools: faixa do Teleguiado em cima da placa — passo atual, net, ponto indicado e setas. */
+ export function GuideHud() {
+@@ -21,19 +29,37 @@ export function GuideHud() {
+   return (
+     <div className="r2gd-hud">
+       <button className="r2gd-hud-arrow" title="Passo anterior (←)" onClick={() => guideStore.prev()} disabled={guideStore.pos === 0}>‹</button>
++      <div className="r2gd-hud-pos" title="Posição deste passo na sequência"><b>{guideStore.pos + 1}</b><span>de {a.steps.length}</span></div>
+       <div className="r2gd-hud-body">
+-        <div className="r2gd-hud-top">{a.title} · passo {r.step.n} de {a.steps[a.steps.length - 1].n}{a.credit ? ` · créditos: ${a.credit}` : ''}</div>
++        {r2h.__r2rp && r2h.__r2rp.on && <div className="r2gd-hud-top">⏪ REPLAY</div>}
++        {(() => {
++          const GI = r2h.__r2GInfo ? r2h.__r2GInfo(a, guideStore.pos) : null;
++          return GI ? (
++            <div className={'r2gd-hud-grp' + (GI.novo ? ' novo' : '')} style={{ borderColor: GI.cor, color: GI.cor }}>
++              {GI.novo ? <b>NOVO GRUPO · </b> : null}
++              {'Grupo ' + String(GI.gn).padStart(2, '0') + (GI.nome ? ' — ' + GI.nome : '') + ' · passo ' + GI.gk + ' de ' + GI.gm}
++            </div>
++          ) : null;
++        })()}
+         <div className="r2gd-hud-net">{r.step.nets.join(' · ')}</div>
+         <div className="r2gd-hud-sub">
+-          {pt ? <>medir em <b>{pt.fixed ? '◆ ' : ''}{pt.label}</b>{r.points.length > 1 ? ` (Tab: ${r.points.length - 1} outro${r.points.length > 2 ? 's' : ''})` : ''}</>
+-            : r.missing.length ? <span className="r2gd-miss">não achei «{r.missing.join(', ')}» nesta placa</span> : 'sem ponto acessível nessa net'}
+-          {r.step.note && <span className="r2gd-hud-note"> · {r.step.note}</span>}
++          {pt ? <>medir em <b>{pt.fixed ? '◆ ' : ''}{pt.label}</b>{ball ? ` · bola ${ball.ball}` : ''}{r.points.length > 1 ? ` · Tab: +${r.points.length - 1}` : ''}</>
++            : r.missing.length ? <span className="r2gd-miss">não está nesta placa</span> : 'sem ponto acessível'}
++          {(() => {
++            // 2R 27/10/2026 (Roger: «no estudo do Erick precisa add a ação em cada passo…»): AÇÃO antes do esperado e da atenção
++            const q = String(r.step.note || '').split(' | ').filter(x => /^(AÇÃO|ESPERADO|ATENÇÃO):/.test(x))
++              .sort((x, y) => (/^AÇÃO:/.test(y) ? 1 : 0) - (/^AÇÃO:/.test(x) ? 1 : 0)).join(' | ');
++            return q && r2h.__r2Notes ? r2h.__r2Notes(R2D, q, 'r2gd-hud-note', true) : null;
++          })()}
+         </div>
+-        {ball && <div className="r2gd-hud-bga" title={`BGA ${ball.rows} linhas × ${ball.cols} colunas`}>
+-          BGA · bola <b>{ball.ball}</b> — linha {ball.row}, coluna {ball.col}{ball.approx ? ' (contando do canto do pino 1)' : ''}</div>}
+         {(r.step.v || r.step.d || r.step.r) && <div className="r2gd-hud-vals">
+-          <span>Tensão <b>{r.step.v || '—'}</b></span><span>Diodo <b>{r.step.d || '—'}</b></span><span>Resist. <b>{r.step.r || '—'}</b></span></div>}
+-        {canFix && <button className="r2gd-hud-fix" onClick={() => guideStore.pinSelectedAsPoint()}>◆ usar {selLabel} como ponto deste passo</button>}
++          {r.step.v && <span>Tensão <b>{r.step.v}</b></span>}
++          {r.step.d && <span>Diodo <b>{r.step.d}</b></span>}
++          {r.step.r && <span>Resist. <b>{r.step.r}</b></span>}
++          {r2h.__r2rp && r2h.__r2rp.on && (r.step.iv || r.step.id || r.step.ir) && <span>Esperado <b>{[r.step.iv, r.step.id, r.step.ir].filter(Boolean).join(' | ')}</b></span>}
++          {r2h.__r2rp && r2h.__r2rp.on && r.step.valAt && <span>medido em <b>{new Date(r.step.valAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</b>{r.step.valBy ? ' · ' + r.step.valBy : ''}</span>}
++        </div>}
++        {canFix && <button className="r2gd-hud-fix" title="Usar o pino selecionado como ponto deste passo" onClick={() => guideStore.pinSelectedAsPoint()}>◆ usar {selLabel}</button>}
+       </div>
+       <button className="r2gd-hud-arrow" title="Próximo passo (→)" onClick={() => guideStore.next()} disabled={guideStore.pos >= a.steps.length - 1}>›</button>
+     </div>
+diff --git a/src/frontend/src/components/Sidebar.tsx b/src/frontend/src/components/Sidebar.tsx
+index 11b55811..ae44d53a 100644
+--- a/src/frontend/src/components/Sidebar.tsx
++++ b/src/frontend/src/components/Sidebar.tsx
+@@ -27,6 +27,17 @@ import { useSidebarState } from '../hooks/useSidebarState';
+ import { NetLegend } from './NetLegend';
+ import { IS_2R } from '../r2/env';
+ 
++/** 2R 21/10/2026: «Acervo 2R | Local» no alto dos dois painéis (a aba Local saiu do trilho) */
++function R2AcervoSeg({ tab }: { tab: string }) {
++  const go = (id: string) => (window as unknown as { __2rGoTab?: (id: string) => void }).__2rGoTab?.(id);
++  return (
++    <div className="r2-acvseg">
++      <button type="button" className={tab === 'acervo' ? 'on' : ''} onClick={() => go('acervo')}>Acervo 2R</button>
++      <button type="button" className={tab === 'library' ? 'on' : ''} onClick={() => go('library')}>Local</button>
++    </div>
++  );
++}
++
+ export function Sidebar() {
+   const { side, collapsed, activeTab, rail, autoHide } = useSidebarState();
+   const [width, setWidth] = useState(loadWidth);
+@@ -201,10 +212,14 @@ export function Sidebar() {
+             <MeterPanel />
+           </PanelErrorBoundary>
+         </div>
+-        <div style={{ display: activeTab === 'guide' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+-          <PanelErrorBoundary label="Sequência de start">
+-            <GuidePanel />
+-          </PanelErrorBoundary>
++        <div className="r2pp-col" style={{ display: activeTab === 'guide' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
++          {/* 2R 21/10/2026: a ficha de análise (index.html) entra em cima da lista do ponto a ponto */}
++          <div id="r2ficha-host" className="r2ficha-host" />
++          <div id="r2seq-host" className="r2seq-host">
++            <PanelErrorBoundary label="Sequência de start">
++              <GuidePanel />
++            </PanelErrorBoundary>
++          </div>
+         </div>
+         <div style={{ display: activeTab === 'curves' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+           <PanelErrorBoundary label="Curvas">
+@@ -212,11 +227,13 @@ export function Sidebar() {
+           </PanelErrorBoundary>
+         </div>
+         <div style={{ display: activeTab === 'acervo' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
++          {IS_2R && <R2AcervoSeg tab={activeTab} />}
+           <PanelErrorBoundary label="Acervo 2R">
+             <AcervoPanel />
+           </PanelErrorBoundary>
+         </div>
+         <div style={{ display: activeTab === 'library' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
++          {IS_2R && <R2AcervoSeg tab={activeTab} />}
+           <LibraryPanel />
+         </div>
+         <div style={{ display: activeTab === 'history' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+-- 
+2.43.0
+

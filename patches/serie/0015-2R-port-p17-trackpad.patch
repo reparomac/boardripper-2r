@@ -1,0 +1,65 @@
+From 48f69913a18b2211044be069d747d8fb827798ef Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:39:12 -0300
+Subject: [PATCH 15/22] 2R port p17 trackpad
+
+---
+ src/frontend/src/components/TrackpadPrefs2R.tsx | 17 +++++++++--------
+ 1 file changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/src/frontend/src/components/TrackpadPrefs2R.tsx b/src/frontend/src/components/TrackpadPrefs2R.tsx
+index dfcc4c36..c19aedf8 100644
+--- a/src/frontend/src/components/TrackpadPrefs2R.tsx
++++ b/src/frontend/src/components/TrackpadPrefs2R.tsx
+@@ -12,8 +12,9 @@ export function TrackpadPrefs2R() {
+   const [pan, setPan] = useState(() => parseFloat(get('2r-trackpad-pan', '1.4')));
+   const [zoom, setZoom] = useState(() => parseFloat(get('2r-trackpad-zoom', '1.4')));
+   const [direct, setDirect] = useState(() => get('2r-trackpad-direto', '1') !== '0');
+-  const [mode, setMode] = useState(() => get('2r-pointer-mode', 'auto'));
+-  const [mz, setMz] = useState(() => parseFloat(get('2r-mouse-zoom', '1')));
++  // 2R 20/10/2026: FlexBV é o padrão; 27/10/2026: roda do mouse 1,6× (chave nova «2r-mouse-zoom2»), até 5×
++  const [mode, setMode] = useState(() => get('2r-pointer-mode', 'flexbv'));
++  const [mz, setMz] = useState(() => parseFloat(get('2r-mouse-zoom2', '1.6')));
+   const [invM, setInvM] = useState(() => get('2r-mouse-invert', '0') === '1');
+   const [invP, setInvP] = useState(() => get('2r-pan-invert', '0') === '1');
+   const setInv = (m: boolean, p: boolean) => { setInvM(m); setInvP(p); put('2r-mouse-invert', m ? '1' : '0'); put('2r-pan-invert', p ? '1' : '0'); };
+@@ -40,30 +41,30 @@ export function TrackpadPrefs2R() {
+           onChange={e => { setDirect(e.target.checked); put('2r-trackpad-direto', e.target.checked ? '1' : '0'); }} /> Trackpad direto (resposta imediata)</label>
+         <div className="r2-tp-mode">
+           <span>Estou usando</span>
+-          {([['auto', 'Automático'], ['mouse', 'Mouse'], ['trackpad', 'Trackpad']] as const).map(([v, t]) => (
++          {([['flexbv', 'FlexBV (padrão)'], ['auto', 'Automático'], ['mouse', 'Mouse'], ['trackpad', 'Trackpad']] as const).map(([v, t]) => (
+             <label key={v} className="r2acv-check"><input type="radio" name="r2pm" checked={mode === v} disabled={!direct}
+               onChange={() => { setMode(v); put('2r-pointer-mode', v); }} /> {t}</label>
+           ))}
+         </div>
+-        <div className="r2acv-note">Mouse: a roda amplia e reduz. Trackpad: dois dedos arrastam e a pinça amplia. Automático descobre sozinho (bom para Windows com os dois).</div>
++        <div className="r2acv-note">FlexBV: dois dedos para baixo aumenta e para cima diminui (roda do mouse: para cima aumenta); arrastar com o clique move a placa. Mouse: a roda amplia e reduz. Trackpad: dois dedos arrastam e a pinça amplia. Automático descobre sozinho.</div>
+         <label className="r2-tp-row">
+           <span>Zoom pela roda do mouse <b>{mz.toFixed(1).replace('.', ',')}×</b></span>
+-          <input type="range" min={0.5} max={3} step={0.1} value={mz} disabled={!direct || mode === 'trackpad'}
+-                 onChange={e => { const n = parseFloat(e.target.value); setMz(n); put('2r-mouse-zoom', String(n)); }} />
++          <input type="range" min={0.5} max={5} step={0.1} value={mz} disabled={!direct || mode === 'trackpad'}
++                 onChange={e => { const n = parseFloat(e.target.value); setMz(n); put('2r-mouse-zoom2', String(n)); }} />
+         </label>
+         <div className="r2-tp-mode">
+           <span>Direção</span>
+           <button className="r2meter-btn r2meter-off" disabled={!direct} onClick={() => setInv(false, false)}>Padrão Windows</button>
+           <button className="r2meter-btn r2meter-off" disabled={!direct} onClick={() => setInv(true, true)}>Padrão Mac (rolagem natural)</button>
+         </div>
+-        <label className="r2acv-check"><input type="checkbox" checked={invM} disabled={!direct}
++        <label className="r2acv-check"><input type="checkbox" checked={invM}
+           onChange={e => setInv(e.target.checked, invP)} /> Inverter a roda do mouse</label>
+         <label className="r2acv-check"><input type="checkbox" checked={invP} disabled={!direct}
+           onChange={e => setInv(invM, e.target.checked)} /> Inverter os dois dedos do trackpad</label>
+         {row('Velocidade ao arrastar (dois dedos)', pan, setPan, '2r-trackpad-pan')}
+         {row('Velocidade da pinça (zoom)', zoom, setZoom, '2r-trackpad-zoom')}
+         <div className="r2-tp-actions">
+-          <button className="r2meter-btn r2meter-off" onClick={() => { setPan(1.4); setZoom(1.4); setMz(1); setMode('auto'); put('2r-trackpad-pan', '1.4'); put('2r-trackpad-zoom', '1.4'); put('2r-mouse-zoom', '1'); put('2r-pointer-mode', 'auto'); setInv(false, false); }}>Voltar ao padrão</button>
++          <button className="r2meter-btn r2meter-off" onClick={() => { setPan(1.4); setZoom(1.4); setMz(1.6); setMode('flexbv'); put('2r-trackpad-pan', '1.4'); put('2r-trackpad-zoom', '1.4'); put('2r-mouse-zoom2', '1.6'); put('2r-pointer-mode', 'flexbv'); setInv(false, false); }}>Voltar ao padrão</button>
+         </div>
+         <div className="r2acv-note">Desligando o «direto», volta o jeito original do BoardRipper.</div>
+       </div>
+-- 
+2.43.0
+

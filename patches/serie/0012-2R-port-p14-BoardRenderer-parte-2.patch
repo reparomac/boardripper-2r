@@ -1,0 +1,349 @@
+From dd27a81e5815cf22609661a049b0dd527a4602b5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:36:32 -0300
+Subject: [PATCH 12/22] 2R port p14 BoardRenderer parte 2
+
+---
+ src/frontend/src/renderer/BoardRenderer.ts | 212 +++++++++++++++------
+ 1 file changed, 152 insertions(+), 60 deletions(-)
+
+diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
+index e4b3f95f..570d8640 100644
+--- a/src/frontend/src/renderer/BoardRenderer.ts
++++ b/src/frontend/src/renderer/BoardRenderer.ts
+@@ -71,7 +71,7 @@ import { log } from '../store/log-store';
+ import { ensurePdfPanel } from '../store/dockview-api';
+ import { fileInputRefs } from '../store/file-inputs';
+ import { obdNetIndex, obdBoardNumberFor, obdStore } from '../store/obd-store';
+-import { primaryDiodeReading, boardHasDiodeData, formatDiode } from '../store/diode-readings';
++import { primaryDiodeReading, boardHasDiodeData, formatDiode, diodeReadingColor } from '../store/diode-readings';
+ import { stepExpApproach, ZOOM_TWEEN_RATE } from './smooth-zoom';
+ import { isPinsOnTop, subscribeCameraOverlay } from '../store/camera-overlay';
+ import { r2PadsColoridos, r2Mesa } from '../r2/hand-flags';
+@@ -385,6 +385,7 @@ function mouseZoomSpeed(): number {
+ }
+ /* eslint-disable @typescript-eslint/no-explicit-any */
+ const r2w = window as any;
++const R2_SEM_FANTASMAS = true;
+ /** 2R 22/10/2026: roda do MOUSE (wheelDeltaY múltiplo de 120, sem giro lateral, sem trackpad nos últimos 400 ms) */
+ function r2RodaDoMouse(e: WheelEvent): boolean {
+   const w = (e as any).wheelDeltaY as number | undefined, ag = performance.now();
+@@ -5766,13 +5767,17 @@ export class BoardRenderer {
+     // always been drawn regardless — the label-raise below is what checks
+     // visibility. Keeping that parity also keeps the selection findable when
+     // a search result sits on the other side.
+-    if (!part) return;
++    // 2R 18/10/2026: peça do lado escondido não desenha seleção por cima do lado à vista
++    if (!part || !this.isPartVisible(part)) return;
+     const s = renderSettingsStore.settings;
+     const butterfly = boardStore.butterfly && !!this.activeScene?.butterflyRoot;
+     const gfx = butterfly && part.side === 'bottom' ? this.butterflyPrimarySelGfx : this.primarySelGfx;
+     const { pad, stroke } = this.selOutline(part);
+     this.lastSelectionPaintScale = this.viewScale();
+-    emitPartOutlineShape(gfx, part, s, pad);
++    // 2R 24/10/2026: a seleção acende o contorno que já existe (o desenhado no componente);
++    // window.__r2SelCaixa=true volta à caixa com folga
++    const R2b = r2w.__r2SelCaixa ? null : (part as any).__r2box;
++    const R2f = () => (R2b ? (R2b.poly ? drawPoly(gfx, R2b.poly) : gfx.rect(R2b.x, R2b.y, R2b.w, R2b.h)) : emitPartOutlineShape(gfx, part, s, pad));
+     // Primary (clicked) part: bold WHITE accent + stronger fill so it is
+     // unmistakably THE selection amid muted net-members (#23). White stays
+     // distinct from the yellow members, the worklist mark colours
+@@ -5783,15 +5788,20 @@ export class BoardRenderer {
+     const PRIMARY_SEL = hexToInt(tb.selectedPart ?? '#ffffff');
+     const blinkRed = this.selectionBlinkPhase > 0 && this.selectionBlinkPhase % 2 === 1;
+     const selColor = blinkRed ? 0xcc2222 : PRIMARY_SEL;
+-    // The wash under the outline: white brightens a body on a dark canvas, but
+-    // on paper the ink is black and a black wash made the selected part the
+-    // darkest thing on the board (2026-10-13). A scheme with a highlighter
+-    // washes in that colour instead — the marker, with the ink kept for the edge.
+-    const washColor = tb.highlighter ? hexToInt(tb.highlighter) : PRIMARY_SEL;
+-    gfx.fill({ color: washColor, alpha: Math.min(0.22, s.selectionFillAlpha * 3 + 0.08) });
+-    // ×1.25 over the setting (default 2 px → 2.5 px): enough primacy over
+-    // the member boxes, without the band the old ×1.7 world-mil stroke became.
+-    gfx.stroke({ width: stroke * 1.25, color: selColor, alpha: 1.0 });
++    if (R2b) {
++      // 2R 24/10/2026 (Roger: «quando selecionar… linha mais grossa com 20% de efeito neon, só no contorno»)
++      R2f(); gfx.stroke({ width: stroke * 7, color: selColor, alpha: 0.07 });
++      R2f(); gfx.stroke({ width: stroke * 4.5, color: selColor, alpha: 0.13 });
++      R2f(); gfx.stroke({ width: stroke * 2.2, color: selColor, alpha: 1 });
++    } else {
++      R2f();
++      // The wash under the outline (0.50.2): a scheme with a highlighter washes in that colour.
++      const washColor = tb.highlighter ? hexToInt(tb.highlighter) : PRIMARY_SEL;
++      gfx.fill({ color: washColor, alpha: Math.min(0.22, s.selectionFillAlpha * 3 + 0.08) });
++      // ×1.25 over the setting (default 2 px → 2.5 px): enough primacy over
++      // the member boxes, without the band the old ×1.7 world-mil stroke became.
++      gfx.stroke({ width: stroke * 1.25, color: selColor, alpha: 1.0 });
++    }
+   }
+ 
+   private renderSelection() {
+@@ -5977,7 +5987,7 @@ export class BoardRenderer {
+     const activeNets: Array<{ name: string; glowColor: number }> = [];
+     const activeNetNames = new Set<string>();
+     if (primaryNet) {
+-      activeNets.push({ name: primaryNet, glowColor: COLORS.netHighlight });
++      activeNets.push({ name: primaryNet, glowColor: renderSettingsStore.settings.netLineColor ?? COLORS.netHighlight }); // 2R: pads da net na cor da linha
+       activeNetNames.add(primaryNet);
+       if (boardStore.netLineMode === 'chain-adjacent' && sel.highlightedNet) {
+         for (const adj of sel.adjacentNets) {
+@@ -6192,7 +6202,10 @@ export class BoardRenderer {
+           const isBotGfx = gfx === this.butterflySelectionGfx;
+ 
+           const isPin1 = ref.pinIndex === 0 && part.pins.length > 2;
+-          const pinColor = (isPin1 && s.showPin1Marker) ? COLORS.pin1 : pinColorFor(pin.net, pin.side);
++          // 2R 20/10/2026: com os pads em cinza, a net escolhida acende inteira na cor da linha
++          const pinColor = r2PadsColoridos()
++            ? ((isPin1 && s.showPin1Marker) ? COLORS.pin1 : pinColorFor(pin.net, pin.side))
++            : glowColor;
+ 
+           // Affected names for label re-clone.
+           if (part.side === 'bottom') affectedBotNames.add(part.name);
+@@ -6202,7 +6215,8 @@ export class BoardRenderer {
+           const storedPads = part.pins.length === 2 ? this.activeScene?.twoPinPadPolys.get(ref.partIndex) : null;
+           const pb = pin.padBounds;
+           const pushDim = (fn: () => void) => {
+-            if (!dimForHighlight) return;
++            // 2R 20/10/2026: pads da net sempre preenchidos (mesmo sem escurecer a placa)
++            if (!dimForHighlight && r2PadsColoridos()) return;
+             const map = isBotGfx ? botByColor : topByColor;
+             let arr = map.get(pinColor);
+             if (!arr) { arr = []; map.set(pinColor, arr); }
+@@ -6837,7 +6851,12 @@ export class BoardRenderer {
+   }
+ 
+   /** Recompute cached net line segments (start/end points + color) when selection or viewport changes */
++  /** 2R 24/10/2026: nomes dos componentes da net (etiquetas do ui/boardripper_alt.py, via window.__2rRs) */
++  __r2Tags: Array<{ n: string; x: number; y: number; y1: number; d: string; dc: number }> = [];
+   private recomputeNetLineSegments() {
++    this.__r2Tags = [];
++    void this.clipToRectEdge; // 2R: as linhas saem do pino; a função fica para o modo antigo do upstream
++    (r2w.__2rRs || (r2w.__2rRs = new Set())).add(this);
+     this.netLineSegments = [];
+     this.netLineSegmentsByColor.clear();
+     this.netLineFadeDist = 0;
+@@ -6943,8 +6962,8 @@ export class BoardRenderer {
+         }
+ 
+         if (bestPin) {
+-          const start = this.clipToRectEdge(selCenterW, bestPin, selEB, selectedRoot);
+-          this.netLineSegments.push({ start, end: bestPin, color });
++          // 2R: a linha sai do PINO (não da borda do componente); BOTTOM em azul-claro
++          this.netLineSegments.push({ start: selCenterW, end: bestPin, color: r2w.__r2OutraFace !== false && part.side === 'bottom' ? 4178935 : color });
+         }
+         targetCount++;
+       }
+@@ -6952,47 +6971,96 @@ export class BoardRenderer {
+       const vpScale = Math.abs(this.viewport.scale.x);
+       this.netLineFadeDist = Math.max(this.netLineFadeDist, targetCount > 8 ? 60 / vpScale : 0);
+     } else {
+-      // ── Chain mode: greedy MST connecting every part on this net ──
+-      type NetPartInfo = { partIndex: number; center: Point; eb: ReturnType<typeof computePartRenderBounds>; root: Container | undefined };
+-      const netParts: NetPartInfo[] = [];
+-      const seenParts = new Set<number>();
++      // ── Chain mode ──
++      // 2R 20/10/2026 (Roger): linha liga PINO a PINO (árvore mínima pelos pinos mais próximos de cada par de componentes)
++      const f = new Map<number, number[]>();
+       for (const ref of net.pinIndices) {
+-        if (seenParts.has(ref.partIndex)) continue;
+-        seenParts.add(ref.partIndex);
+-        const part = this.board.parts[ref.partIndex];
+-        if (!part) continue;
+-        const isGhost = !this.isPartVisible(part) && this.crossSideGhostParts.has(ref.partIndex);
+-        if (!this.isPartVisible(part) && !isGhost) continue;
+-        const root = isGhost ? this.activeScene?.root : this.rootForPart(part);
+-        const eb = computePartRenderBounds(part, s);
+-        const center = this.sceneToWorld({ x: eb.px + eb.pw / 2, y: eb.py + eb.ph / 2 }, root);
+-        netParts.push({ partIndex: ref.partIndex, center, eb, root });
+-      }
+-      if (netParts.length < 2) return;
+-
+-      const connected = new Set<number>([0]);
+-      const remaining = new Set<number>();
+-      for (let i = 1; i < netParts.length; i++) remaining.add(i);
+-
+-      while (remaining.size > 0) {
+-        let bestI = -1, bestJ = -1, bestDist = Infinity;
+-        for (const ci of connected) {
+-          const a = netParts[ci].center;
+-          for (const ri of remaining) {
+-            const b = netParts[ri].center;
+-            const dx = b.x - a.x, dy = b.y - a.y;
+-            const d = dx * dx + dy * dy;
+-            if (d < bestDist) { bestDist = d; bestI = ci; bestJ = ri; }
++        let q = f.get(ref.partIndex);
++        if (!q) { q = []; f.set(ref.partIndex, q); }
++        q.push(ref.pinIndex);
++      }
++      const R2BB = (v: Part, w: Container | undefined) => {
++        const k = computePartRenderBounds(v, s);
++        const c4 = [[k.px, k.py], [k.px + k.pw, k.py], [k.px, k.py + k.ph], [k.px + k.pw, k.py + k.ph]]
++          .map(q => this.sceneToWorld({ x: q[0], y: q[1] }, w));
++        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
++        for (const q of c4) { if (q.x < x0) x0 = q.x; if (q.x > x1) x1 = q.x; if (q.y < y0) y0 = q.y; if (q.y > y1) y1 = q.y; }
++        return { x0, x1, y0, y1 };
++      };
++      // 2R 24/10/2026 22h (Roger: «quando tem uma linha que vai para a outra face da placa, tem que ter outra NET com cor
++      // diferente»): pinos da net na outra face entram na linha, e o trecho até eles sai em azul-claro
++      // (window.__r2OutraFace=false desliga)
++      const R2OF = r2w.__r2OutraFace !== false, R2OC = 4178935;
++      const ol: boolean[] = [], h: Point[][] = [], bx: Array<{ x0: number; x1: number; y0: number; y1: number }> = [], ix: number[] = [];
++      for (const [pI, qs] of f) {
++        const v = this.board.parts[pI];
++        if (!v) continue;
++        const x = !this.isPartVisible(v) && this.crossSideGhostParts.has(pI);
++        const oface = !x && R2OF && !this.isPartVisible(v) && !v.hidden && !this.isTypeHidden(v.name) && !boardStore.butterfly;
++        if (!this.isPartVisible(v) && !x && !oface) continue;
++        const w = x || oface ? this.activeScene?.root : this.rootForPart(v);
++        const pts: Point[] = [], st = qs.length > 40 ? qs.length / 40 : 1;
++        for (let z = 0; z < qs.length; z += st) {
++          const pn = v.pins[qs[Math.floor(z)]];
++          if (pn) pts.push(this.sceneToWorld(pn.position, w));
++        }
++        const BB = R2BB(v, w);
++        if (!pts.length) pts.push({ x: (BB.x0 + BB.x1) / 2, y: (BB.y0 + BB.y1) / 2 });
++        h.push(pts); bx.push(BB); ix.push(pI); ol.push(v.side === 'bottom');
++      }
++      // 2R: valor de diodo da net (o mesmo em todos os pinos) vai no card branco
++      let R2D = '', R2DC = 0;
++      try {
++        const bn = this.getMemoizedObdBoardNumber() ?? undefined;
++        for (const pI of ix) {
++          for (const qi of f.get(pI) || []) {
++            const pn = this.board.parts[pI]?.pins[qi];
++            if (!pn) continue;
++            const kn = primaryDiodeReading(pn, bn);
++            if (kn && kn.kind && kn.kind !== 'none') {
++              R2D = kn.kind === 'open' ? 'OL' : kn.mv === 0 ? '0' : kn.mv != null ? (kn.mv / 1e3).toFixed(3) : String(kn.raw ?? '');
++              R2DC = diodeReadingColor(kn);
++              break;
++            }
+           }
++          if (R2D) break;
+         }
+-        if (bestJ < 0) break;
+-        connected.add(bestJ);
+-        remaining.delete(bestJ);
+-
+-        const a = netParts[bestI], b = netParts[bestJ];
+-        const start = this.clipToRectEdge(a.center, b.center, a.eb, a.root);
+-        const end = this.clipToRectEdge(b.center, a.center, b.eb, b.root);
+-        this.netLineSegments.push({ start, end, color });
++      } catch { /* */ }
++      this.__r2Tags = ix.map((pI, k) => ({ n: this.board!.parts[pI]?.name || '', x: (bx[k].x0 + bx[k].x1) / 2, y: bx[k].y0, y1: bx[k].y1, d: R2D, dc: R2DC }));
++      const N = h.length;
++      if (N < 2) return;
++      const D = new Float64Array(N * N), S: Array<[Point, Point] | undefined> = new Array(N * N);
++      for (let a = 0; a < N; a++)
++        for (let c = a + 1; c < N; c++) {
++          let Bd = Infinity, P: Point | null = null, Q: Point | null = null;
++          for (const u of h[a])
++            for (const y of h[c]) {
++              const F = y.x - u.x, G = y.y - u.y, H = F * F + G * G;
++              if (H < Bd) { Bd = H; P = u; Q = y; }
++            }
++          D[a * N + c] = D[c * N + a] = Bd;
++          S[a * N + c] = [P!, Q!];
++          S[c * N + a] = [Q!, P!];
++        }
++      // 2R 24/10/2026 22h (Roger: «quando for bottom é uma cor a net e top outra cor… manter isso padrão»): TOP amarelo,
++      // BOTTOM azul-claro; trecho que troca de face fica na cor da face de destino (a que não está à vista)
++      const vb = !this.isTopVisible && this.isBottomVisible;
++      const linha = (P: Point, a: number, Q: Point, c: number) => {
++        const ba = ol[a], bc = ol[c], cb = !R2OF ? false : ba === bc ? ba : !vb;
++        this.netLineSegments.push({ start: P, end: Q, color: cb ? R2OC : color });
++      };
++      const inT = new Uint8Array(N), K = new Float64Array(N).fill(Infinity), par = new Int32Array(N).fill(-1);
++      K[0] = 0;
++      for (let it = 0; it < N; it++) {
++        let a = -1, Bm = Infinity;
++        for (let c = 0; c < N; c++) if (!inT[c] && K[c] < Bm) { Bm = K[c]; a = c; }
++        if (a < 0) break;
++        inT[a] = 1;
++        if (par[a] >= 0) {
++          const sg = S[par[a] * N + a];
++          if (sg && sg[0]) linha(sg[0], par[a], sg[1], a);
++        }
++        for (let c = 0; c < N; c++) if (!inT[c] && D[a * N + c] < K[c]) { K[c] = D[a * N + c]; par[c] = a; }
+       }
+     }
+   }
+@@ -7010,7 +7078,8 @@ export class BoardRenderer {
+ 
+     const s = renderSettingsStore.settings;
+     const vpScale = Math.abs(this.viewport.scale.x);
+-    const lineW = s.netLineWidth / vpScale;
++    // 2R 26/10/2026 (Roger: «linha da net com a metade da espessura»): ×0,5 → ×0,575 em 27/10 (+15%) (window.__r2NetLineK)
++    const lineW = (s.netLineWidth * (r2w.__r2NetLineK ?? 0.575)) / vpScale;
+ 
+     const pulseT = s.netLinePulse ? (Math.sin(this.netLinePulsePhase * Math.PI * 2) + 1) / 2 : 0;
+     const pulseColor = 0xcc2222;
+@@ -7026,7 +7095,7 @@ export class BoardRenderer {
+     // the pulse animates only the child's alpha. The per-frame cost drops
+     // from full path re-issue to one alpha write.
+     if (!useFade && !s.netLineDashed) {
+-      const sig = `${lineW.toFixed(4)}|${s.netLineAlpha}`;
++      const sig = `${lineW.toFixed(4)}|${s.netLineAlpha}|${s.netLineGlow ?? 0.3}`;
+       if (sig !== this.netLineBakeSig) {
+         this.netLineBakeSig = sig;
+         if (!this.netLinesPulseGfx || this.netLinesPulseGfx.destroyed) {
+@@ -7046,6 +7115,14 @@ export class BoardRenderer {
+         this.netLinesGfx.clear();       // clears geometry only; children survive
+         this.netLinesPulseGfx.clear();
+         for (const [baseColor, segs] of this.netLineSegmentsByColor) {
++          // 2R 20/10/2026: efeito neon (brilho em volta da linha), força em netLineGlow; 26/10: brilho ×0,4 (window.__r2NeonK)
++          const R2G = (s.netLineGlow ?? 0.3) * (r2w.__r2NeonK ?? 0.4);
++          if (R2G > 0) {
++            for (const [wm, am] of [[4, 0.35], [2.2, 1]]) {
++              for (const { start, end } of segs) { this.netLinesGfx.moveTo(start.x, start.y); this.netLinesGfx.lineTo(end.x, end.y); }
++              this.netLinesGfx.stroke({ width: lineW * wm, color: baseColor, alpha: Math.min(1, R2G * am), cap: 'round', join: 'round' });
++            }
++          }
+           for (const { start, end } of segs) {
+             this.netLinesGfx.moveTo(start.x, start.y);
+             this.netLinesGfx.lineTo(end.x, end.y);
+@@ -7099,6 +7176,11 @@ export class BoardRenderer {
+    *  animates `alpha = ghostAlpha`; the outline layer bakes at 1 and animates
+    *  `alpha = outlineAlpha`. Two layers because one Graphics has one alpha. */
+   private renderCrossSideGhosts() {
++    // 2R 18/10/2026: sem fantasmas do outro lado da placa
++    if (R2_SEM_FANTASMAS) {
++      try { this.crossSideGhostGfx.clear(); this.crossSideGhostOutlineGfx.clear(); } catch { /* */ }
++      return;
++    }
+     if (this.crossSideGhostParts.size === 0 || !this.board) {
+       if (this.crossSideGhostBakeSig !== '') {
+         this.crossSideGhostGfx.clear();
+@@ -7795,7 +7877,9 @@ export class BoardRenderer {
+       this.tooltipNetSpan.style.display = hasNet ? '' : 'none';
+     }
+     if (this.tooltipDetailSpan) {
+-      this.tooltipDetailSpan.textContent = info.pin ? `${info.part} · pin ${info.pin}` : info.part;
++      // 2R: «U7800 | Pin 3» com o separador em elemento próprio (estilizado no CSS)
++      this.tooltipDetailSpan.textContent = info.part;
++      if (info.pin) this.tooltipDetailSpan.append(Object.assign(document.createElement('i'), { className: 'r2-sep', textContent: '|' }), `Pin ${info.pin}`);
+     }
+     // Cross-board compare line. Without it the board highlight only says
+     // "this pin is different" and leaves you to go and find what it differs
+@@ -8693,8 +8777,16 @@ export class BoardRenderer {
+ 
+   private zoomKeyboard(direction: ZoomDirection) {
+     if (!this.viewport) return;
+-    const cx = this.viewport.screenWidth / 2;
+-    const cy = this.viewport.screenHeight / 2;
++    let cx = this.viewport.screenWidth / 2;
++    let cy = this.viewport.screenHeight / 2;
++    // 2R 24/10/2026 21h30 (Roger): botões/teclado aproximam na cruz do centro; a rodinha/pinça continua no mouse.
++    // localStorage «2r-zoom-tecla-mouse»="1" volta ao zoom na direção do mouse
++    try {
++      if (localStorage.getItem('2r-zoom-tecla-mouse') === '1') {
++        const M = r2w.__r2MouseXY, R = this.containerEl.getBoundingClientRect();
++        if (M && Date.now() - M.t < 15e3 && M.x >= R.left && M.x <= R.right && M.y >= R.top && M.y <= R.bottom) { cx = M.x - R.left; cy = M.y - R.top; }
++      }
++    } catch { /* */ }
+     const { keyboardZoomDelta } = renderSettingsStore.settings;
+     const rawDelta = direction === 'in' ? -keyboardZoomDelta : keyboardZoomDelta;
+     this.zoomAtScreen(cx, cy, rawDelta, true);
+-- 
+2.43.0
+

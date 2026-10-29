@@ -1,0 +1,133 @@
+From 436ec575ad634b1894116720813f39a7494b84dc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:29:12 -0300
+Subject: [PATCH 07/22] 2R port p08 bridge + rc
+
+---
+ src/frontend/src/main.tsx      |  1 +
+ src/frontend/src/r2/bridge.ts  | 21 +++++++++++
+ src/frontend/src/r2/hand-rc.ts | 64 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 86 insertions(+)
+ create mode 100644 src/frontend/src/r2/hand-rc.ts
+
+diff --git a/src/frontend/src/main.tsx b/src/frontend/src/main.tsx
+index e9615de7..442db6ca 100644
+--- a/src/frontend/src/main.tsx
++++ b/src/frontend/src/main.tsx
+@@ -1,5 +1,6 @@
+ import './polyfills';
+ import './r2/hand-globals';
++import './r2/hand-rc';
+ import { installPortuguese } from './r2/translate';
+ import { installBridge } from './r2/bridge';
+ import { installMeter } from './r2/meter-store';
+diff --git a/src/frontend/src/r2/bridge.ts b/src/frontend/src/r2/bridge.ts
+index b814e3fc..2f583ddd 100644
+--- a/src/frontend/src/r2/bridge.ts
++++ b/src/frontend/src/r2/bridge.ts
+@@ -7,6 +7,9 @@ import { boardStore } from '../store/board-store';
+ import { openPdfFiles } from '../store/file-actions';
+ import { getFileExtension } from '../parsers/registry';
+ import { IS_2R } from './env';
++import { getDockviewApi } from '../store/dockview-api';
++import { pdfStore } from '../store/pdf-store';
++import { guideStore } from './guide-store';
+ 
+ export function installBridge(): void {
+   if (!IS_2R) return;
+@@ -28,4 +31,22 @@ export function installBridge(): void {
+     }
+   };
+   w.__2rToast = (msg: string, kind: 'error' | 'info' = 'info') => boardStore.addToast(msg, kind);
++  // 2R: abrir outra placa fecha a anterior (placas, PDFs e painéis)
++  w.__2rFecharTudo = (nm: string[]) => {
++    try {
++      try {
++        // 26/10/2026: a mesma placa abrindo de novo (outro arquivo/cache) não derruba o ponto a ponto — o card sumia
++        const B = String(guideStore.active?.board || '').toUpperCase();
++        const mesma = !!B && Array.isArray(nm) && nm.some(x => String(x).toUpperCase().includes(B));
++        if (guideStore.on && !mesma) guideStore.stop();
++      } catch { /* */ }
++      const v = getDockviewApi();
++      if (v) for (const p of [...v.panels]) if (p.id.startsWith('board-') || p.id.startsWith('pdf-')) v.removePanel(p);
++      for (const t of [...boardStore.tabs]) boardStore.closeTab(t.id);
++      for (const n of [...boardStore.pdfFileNames]) {
++        try { pdfStore.closeFile(n); } catch { /* */ }
++        boardStore.removePdf(n);
++      }
++    } catch { /* */ }
++  };
+ }
+diff --git a/src/frontend/src/r2/hand-rc.ts b/src/frontend/src/r2/hand-rc.ts
+new file mode 100644
+index 00000000..f37d5d38
+--- /dev/null
++++ b/src/frontend/src/r2/hand-rc.ts
+@@ -0,0 +1,64 @@
++// 2R Tools — API usada pelo RastreCurve / app (window.__2rFitParts e window.__2rRC). Estava no fim do bundle 0.48.0
++// (edição à mão de 18/10/2026: ajustar pelos componentes, travar zoom mínimo/máximo, selecionar peça).
++/* eslint-disable @typescript-eslint/no-explicit-any */
++import { boardStore } from '../store/board-store';
++import { viewCommands } from '../store/view-commands';
++
++const w = window as any;
++try {
++  w.__2rFitParts = () => {
++    try {
++      const r = w.__2rRend, v = w.__2rVP;
++      if (!r || !v || !r.board || !r.containerEl) return false;
++      const W = r.containerEl.clientWidth, H = r.containerEl.clientHeight;
++      if (!(W > 50 && H > 50)) return false;
++      const P = r.board.parts || [];
++      const a: number[] = [], b: number[] = [], c: number[] = [], d: number[] = [];
++      for (const p of P) {
++        const q = p.bounds;
++        if (!q || !isFinite(q.minX + q.maxX + q.minY + q.maxY)) continue;
++        a.push(q.minX); b.push(q.maxX); c.push(q.minY); d.push(q.maxY);
++      }
++      if (a.length < 5) return false;
++      const lo = (z: number[]) => { z.sort((x, y) => x - y); return z[Math.floor(z.length * 0.005)]; };
++      const hi = (z: number[]) => { z.sort((x, y) => x - y); return z[Math.min(z.length - 1, Math.floor(z.length * 0.995))]; };
++      const x0 = lo(a), x1 = hi(b), y0 = lo(c), y1 = hi(d), dx = x1 - x0, dy = y1 - y0;
++      if (!(dx > 0 && dy > 0)) return false;
++      v.resize(W, H);
++      r.app.renderer.resize(W, H);
++      const s = Math.min(W / (dx * 1.08), H / (dy * 1.08));
++      v.setZoom(s, true);
++      v.moveCenter((x0 + x1) / 2, (y0 + y1) / 2);
++      r.needsRender = true;
++      return true;
++    } catch { return false; }
++  };
++  w.__2rRC = {
++    part: () => { const t = boardStore.activeTab, i = t?.selection?.partIndex; return i == null ? '' : t!.board?.parts[i]?.name || ''; },
++    pin: () => { const s = boardStore.activeTab?.selection; return s && s.pinIndex != null ? s.pinIndex : -1; },
++    select: (n: string, f?: boolean) => {
++      const t = boardStore.activeTab;
++      if (!t?.board) return false;
++      const u = String(n || '').toUpperCase(), i = t.board.parts.findIndex(c => c.name.toUpperCase() === u);
++      if (i < 0) return false;
++      if (f) boardStore.focusPart(n); else boardStore.selectPart(i);
++      return true;
++    },
++    clear: () => { boardStore.selectPart(null); },
++    ready: () => !!boardStore.activeTab?.board,
++    lockMin: (f: number) => {
++      const v = w.__2rVP;
++      if (!v) return 0;
++      try { if (!w.__2rFitParts()) viewCommands.fit(); } catch { /* */ }
++      const bs = Math.abs(v.scale.x);
++      if (!(bs > 0)) return 0;
++      w.__2rMinZoom = bs * f;
++      w.__2rMaxZoom = bs * 40;
++      return w.__2rMinZoom;
++    },
++    unlockMin: () => { w.__2rMinZoom = 0; w.__2rMaxZoom = 0; },
++    fit: () => { try { if (!w.__2rFitParts()) viewCommands.fit(); } catch { /* */ } },
++    id: () => { const t = boardStore.activeTab; return t ? (t.id || '') + '|' + (t.board?.parts?.length || 0) : ''; },
++  };
++} catch { /* */ }
++export {};
+-- 
+2.43.0
+

@@ -1,0 +1,192 @@
+From d7cd008868c615c5de3c42775eb1c507fc0afeb2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:45:15 -0300
+Subject: [PATCH 20/22] =?UTF-8?q?2R=20port=20p24=20teclado,=20sess=C3=A3o,?=
+ =?UTF-8?q?=20mapa?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ .../src/components/SessionRestorePrompt.tsx   |  8 ++++-
+ .../src/components/home/HomeBackdrop.tsx      |  2 +-
+ .../src/hooks/useKeyboardShortcuts.ts         | 35 ++++++++++++++++++-
+ src/frontend/src/main.tsx                     | 11 ++++++
+ src/frontend/src/panels/BoardViewerPanel.tsx  |  6 ++--
+ src/frontend/src/store/session-store.ts       | 11 ++----
+ 6 files changed, 60 insertions(+), 13 deletions(-)
+
+diff --git a/src/frontend/src/components/SessionRestorePrompt.tsx b/src/frontend/src/components/SessionRestorePrompt.tsx
+index 5605aa25..3539c8cc 100644
+--- a/src/frontend/src/components/SessionRestorePrompt.tsx
++++ b/src/frontend/src/components/SessionRestorePrompt.tsx
+@@ -7,9 +7,15 @@ import { readSession, clearSession, restoreSession, type SavedSession } from '..
+  *  user de-select individual boards/PDFs before reopening. */
+ export function SessionRestorePrompt() {
+   // Read once at mount: a non-empty saved session means we should ask.
++  // 2R 18/10/2026: reabre sozinho, sem perguntar (window.__2rNoRestore=true não reabre)
+   const [session, setSession] = useState<SavedSession | null>(() => {
+     const s = readSession();
+-    return s && s.entries.length > 0 ? s : null;
++    const w = window as unknown as { __2rNoRestore?: boolean; __2rRestoring?: number };
++    if (s && s.entries.length > 0 && !w.__2rNoRestore && !w.__2rRestoring) {
++      w.__2rRestoring = 1;
++      setTimeout(() => { try { void restoreSession(s); } catch { /* */ } }, 0);
++    }
++    return null;
+   });
+   const [busy, setBusy] = useState(false);
+   // Default: everything checked; the user unchecks what they don't want.
+diff --git a/src/frontend/src/components/home/HomeBackdrop.tsx b/src/frontend/src/components/home/HomeBackdrop.tsx
+index e13c971c..33ebab62 100644
+--- a/src/frontend/src/components/home/HomeBackdrop.tsx
++++ b/src/frontend/src/components/home/HomeBackdrop.tsx
+@@ -1159,7 +1159,7 @@ export function HomeBackdrop() {
+         <div className="r2-home">
+           <img className="r2-home-logo" src={logo2r} alt="2R Tools" draggable={false} />
+           <div className="r2-home-title">Nenhuma placa aberta</div>
+-          <div className="r2-home-text">Busque a placa na aba <b>Acervo 2R</b> (nuvem) ao lado, ou abra um arquivo deste computador em <b>Local</b> ou no botão <b>Abrir</b>.</div>
++          <div className="r2-home-text">Busque a placa na aba <b>Acervo 2R</b> (nuvem) ao lado, ou abra um arquivo deste computador no botão <b>Abrir</b>.</div>
+         </div>
+       ) : (
+       <div className="home-backdrop-scroll">
+diff --git a/src/frontend/src/hooks/useKeyboardShortcuts.ts b/src/frontend/src/hooks/useKeyboardShortcuts.ts
+index a70d80a2..d6003c73 100644
+--- a/src/frontend/src/hooks/useKeyboardShortcuts.ts
++++ b/src/frontend/src/hooks/useKeyboardShortcuts.ts
+@@ -13,6 +13,7 @@ import { peekHintStore } from '../store/peek-hint-store';
+ import { historyBack, historyForward } from '../store/nav-history-actions';
+ import { focusRibbonFind } from '../components/overlay/ribbon-find';
+ import { log } from '../store/log-store';
++import { stepPin } from '../r2/probe-seq';
+ 
+ /**
+  * Global keyboard shortcut handler — attach once in App.
+@@ -26,6 +27,13 @@ function activePanelKind(): 'board' | 'pdf' | null {
+ }
+ 
+ // Track last known cursor position for context-sensitive shortcuts
++/* 2R 24/10/2026 (Roger: «os atalhos do BDV e PDF agem onde estiver o foco» — deck Ulanzi): expõe o foco (board|pdf) */
++{
++  const w = window as unknown as Record<string, unknown>;
++  w.__r2Td = activePanelKind;
++  w.__r2Me = pdfStore;
++  w.__r2ed = viewCommands;
++}
+ let _lastMouseX = 0;
+ let _lastMouseY = 0;
+ 
+@@ -119,7 +127,9 @@ export function useKeyboardShortcuts() {
+       // symmetric shift-guard otherwise rejects Shift+Cmd+F outright.
+       const focusSearchMatch = focusSearch && (
+         matchesShortcut(e, focusSearch) ||
+-        matchesShortcut(e, { ...focusSearch, shift: true })
++        matchesShortcut(e, { ...focusSearch, shift: true }) ||
++        // 2R 24/10/2026 (Roger: «Control+F = busca, tanto no PDF quanto no BDV»): no Mac o Control+F também vale
++        (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'f' || e.key === 'F'))
+       );
+       if (focusSearch && focusSearchMatch) {
+         // Standard behavior: if the PDF search field is already focused with a
+@@ -277,6 +287,29 @@ export function useKeyboardShortcuts() {
+         }
+       }
+ 
++      // 2R 18/10/2026: Ctrl+←/→ gira a placa (no PDF também gira a placa — o PDF não gira)
++      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
++        const x = activePanelKind();
++        if (x === 'board' || x === 'pdf') {
++          e.preventDefault();
++          const w = e.key === 'ArrowLeft' ? 'cw' : 'ccw';
++          if (x === 'pdf') pdfStore.rotateActive(w); else if (w === 'ccw') boardStore.rotateCCW(); else boardStore.rotateCW();
++          return;
++        }
++      }
++      // 2R 24/10/2026 (Roger: «a tecla N (next) serve para saltar para o próximo resultado localizado no PDF e no BDV;
++      // em ponto a ponto salta para a próxima leitura»): N = próximo, Shift+N = anterior
++      const r2k = window as unknown as { __r2TeclaN?: boolean; __r2NBusca?: string; __r2seq?: { on: boolean; next(): void; prev(): void } };
++      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'n' || e.key === 'N') && r2k.__r2TeclaN !== false) {
++        const vo = e.shiftKey;
++        try {
++          const sq = r2k.__r2seq;
++          if (sq && sq.on && r2k.__r2NBusca !== 'pdf') { e.preventDefault(); if (vo) sq.prev(); else sq.next(); return; }
++        } catch { /* */ }
++        if (pdfStore.matches.length > 0) { e.preventDefault(); if (vo) pdfStore.prevMatch(); else pdfStore.nextMatch(); return; }
++        try { if (stepPin(vo ? -1 : 1)) { e.preventDefault(); return; } } catch { /* */ }
++      }
++
+       // Arrow keys in PDF context: navigate matches if they exist, otherwise scroll pages
+       if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+         if (pdfStore.matches.length > 0) {
+diff --git a/src/frontend/src/main.tsx b/src/frontend/src/main.tsx
+index 442db6ca..939e0be3 100644
+--- a/src/frontend/src/main.tsx
++++ b/src/frontend/src/main.tsx
+@@ -1,6 +1,7 @@
+ import './polyfills';
+ import './r2/hand-globals';
+ import './r2/hand-rc';
++import { boardStore } from './store/board-store';
+ import { installPortuguese } from './r2/translate';
+ import { installBridge } from './r2/bridge';
+ import { installMeter } from './r2/meter-store';
+@@ -49,3 +50,13 @@ if (!window.__brUnsupported) {
+     </StrictMode>
+   );
+ }
++
++// 2R 18/10/2026: Ctrl/⌘ + ←/→ gira a placa em qualquer lugar (menos em campos de texto)
++window.addEventListener('keydown', (e: KeyboardEvent) => {
++  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
++  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
++  const t = e.target as HTMLElement | null;
++  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
++  e.preventDefault(); e.stopPropagation();
++  if (e.key === 'ArrowLeft') boardStore.rotateCCW(); else boardStore.rotateCW();
++}, true);
+diff --git a/src/frontend/src/panels/BoardViewerPanel.tsx b/src/frontend/src/panels/BoardViewerPanel.tsx
+index 6dcc6d92..b5237c3e 100644
+--- a/src/frontend/src/panels/BoardViewerPanel.tsx
++++ b/src/frontend/src/panels/BoardViewerPanel.tsx
+@@ -47,7 +47,7 @@ export function BoardViewerPanel(props: IDockviewPanelProps<{ boardTabId?: numbe
+   const netLineMode = thisTab?.netLineMode ?? 'off';
+   const dimMode = thisTab?.dimMode ?? 'dim';
+   const showHoverInfo = thisTab?.showHoverInfo ?? true;
+-  const ghostMode = thisTab?.ghostMode ?? 'ghosts';
++  const ghostMode = thisTab?.ghostMode ?? 'off';
+   const followPdf = thisTab?.followPdf ?? false;
+   const layerStates = thisTab?.layerStates ?? [];
+   const bareAction = useBareScrollAction();
+@@ -342,7 +342,9 @@ export function BoardViewerPanel(props: IDockviewPanelProps<{ boardTabId?: numbe
+       )}
+       <ResizeModeBanner />
+       <SlideLayer tabId={tabId} renderer={liveRenderer} rootRef={rootRef} hostRef={containerRef} fileName={tabFileName} />
+-      <BoardMinimap renderer={liveRenderer} mode={slideOn ? 'always' : renderSettings.minimapOnPan ? 'onPan' : 'off'} />
++      {/* 2R 27/10/2026 (Roger: «o mapa de localização, deixar sempre aparente… se eu clicar no mapa, ele vai para o BDV no mesmo
++          local clicado»): mapa sempre visível; window.__r2MapaSoNoPan=true volta ao antigo */}
++      <BoardMinimap renderer={liveRenderer} mode={(window as unknown as { __r2MapaSoNoPan?: boolean }).__r2MapaSoNoPan ? (slideOn ? 'always' : renderSettings.minimapOnPan ? 'onPan' : 'off') : 'always'} />
+       <div className="board-sidebar-toggle-group">
+         <button
+           className={`board-sidebar-toggle ${sidebarOpen ? 'active' : ''}`}
+diff --git a/src/frontend/src/store/session-store.ts b/src/frontend/src/store/session-store.ts
+index ee6f1f4c..ea59b53d 100644
+--- a/src/frontend/src/store/session-store.ts
++++ b/src/frontend/src/store/session-store.ts
+@@ -181,12 +181,7 @@ export async function restoreSession(session: SavedSession): Promise<void> {
+     if (tab) boardStore.switchTab(tab.id);
+   }
+ 
+-  if (opened > 0 && unavailable.length === 0) {
+-    boardStore.addToast(`Reopened ${opened} item${opened > 1 ? 's' : ''} from your last session`, 'info');
+-  } else if (unavailable.length > 0) {
+-    boardStore.addToast(
+-      `Reopened ${opened} · ${unavailable.length} unavailable (re-drop): ${unavailable.slice(0, 3).join(', ')}${unavailable.length > 3 ? '…' : ''}`,
+-      'error',
+-    );
+-  }
++  // 2R 27/10 (Roger: tirar o recado vermelho) — placas do Acervo 2R não ficam no computador; não reabrir não é erro
++  if (unavailable.length > 0) log.ui.warn(`session restore: ${unavailable.length} não reabertos: ${unavailable.join(', ')}`);
++  if (opened > 0) boardStore.addToast(`${opened} placa${opened > 1 ? 's' : ''} reaberta${opened > 1 ? 's' : ''} da última sessão`, 'info');
+ }
+-- 
+2.43.0
+
