@@ -7,7 +7,7 @@ Nada disto foi enviado ao GitHub.
   https://github.com/AlexeyInwerp/BoardRipper (`git apply` na raiz do repositório). Inclui a 2R da 0.48.0
   (`2rtools-customizacoes-0.48.0.patch` + `GuidePanel.tsx` + `logo2r-print.ts`) e, portadas para o código-fonte
   (TypeScript), todas as edições feitas à mão no bundle `index-BscvDDFO.js` e no CSS de 12/10 a 27/10/2026.
-- `serie/` — as mesmas mudanças em 34 passos (`git am serie/*.patch`), para ver o que mudou em cada parte.
+- `serie/` — as mesmas mudanças em 32 passos (`git am serie/*.patch`), para ver o que mudou em cada parte.
 - `fonte-modificado-0.50.2.tar.gz` — os 74 arquivos do fonte já modificados (prontos para comparar).
 - `REFAZER_BOARDRIPPER_0.50.2.command` — refaz a página e o servidor a partir do upstream (precisa de git, node e go).
 
