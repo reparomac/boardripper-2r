@@ -1,7 +1,7 @@
 From 557d78e66a1b68ec28d67f43a404ed8e0fdb76a3 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:32:17 -0300
-Subject: [PATCH 09/31] 2R port p10-p11 search + board-scene
+Subject: [PATCH 09/32] 2R port p10-p11 search + board-scene
 
 ---
  src/frontend/src/r2/hand-flags.ts        |   12 +

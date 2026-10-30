@@ -1,7 +1,7 @@
 From dd27a81e5815cf22609661a049b0dd527a4602b5 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:36:32 -0300
-Subject: [PATCH 12/31] 2R port p14 BoardRenderer parte 2
+Subject: [PATCH 12/32] 2R port p14 BoardRenderer parte 2
 
 ---
  src/frontend/src/renderer/BoardRenderer.ts | 212 +++++++++++++++------

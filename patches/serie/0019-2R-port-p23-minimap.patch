@@ -1,7 +1,7 @@
 From f6ec488e749c4ed0dcd90de18a4e8500ce9180db Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:44:16 -0300
-Subject: [PATCH 19/31] 2R port p23 minimap
+Subject: [PATCH 19/32] 2R port p23 minimap
 
 ---
  src/frontend/src/components/BoardMinimap.tsx | 32 ++++++++++++++++----

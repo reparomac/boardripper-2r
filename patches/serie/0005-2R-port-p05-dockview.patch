@@ -1,7 +1,7 @@
 From a8525153d666884f44e8c154c812b65438b4703a Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:26:13 -0300
-Subject: [PATCH 05/31] 2R port p05 dockview
+Subject: [PATCH 05/32] 2R port p05 dockview
 
 ---
  src/frontend/src/store/dockview-api.ts | 97 +++++++++++++++++++++++++-

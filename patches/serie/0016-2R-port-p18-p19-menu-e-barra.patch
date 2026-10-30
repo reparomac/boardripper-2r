@@ -1,7 +1,7 @@
 From d0dca9e94ea8a80000b311cd0f87e0aa700a0214 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:40:27 -0300
-Subject: [PATCH 16/31] 2R port p18-p19 menu e barra
+Subject: [PATCH 16/32] 2R port p18-p19 menu e barra
 
 ---
  src/frontend/src/components/MenuBar2R.tsx | 19 +++++++-

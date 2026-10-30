@@ -10340,7 +10340,7 @@ index 00000000..7a21039a
 +  if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
 +}
 diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
-index 188a12c8..c6442842 100644
+index 188a12c8..7cf392fe 100644
 --- a/src/frontend/src/renderer/BoardRenderer.ts
 +++ b/src/frontend/src/renderer/BoardRenderer.ts
 @@ -71,8 +71,11 @@ import { log } from '../store/log-store';
@@ -10392,7 +10392,7 @@ index 188a12c8..c6442842 100644
 +}
 +/* eslint-disable @typescript-eslint/no-explicit-any */
 +const r2w = window as any;
-+const R2_SEM_FANTASMAS = true;
++const R2_SEM_FANTASMAS = false; // 2R 30/10/2026: ghost do upstream 0.50 de volta, na íntegra
 +/** 2R 22/10/2026: roda do MOUSE (wheelDeltaY múltiplo de 120, sem giro lateral, sem trackpad nos últimos 400 ms) */
 +function r2RodaDoMouse(e: WheelEvent): boolean {
 +  const w = (e as any).wheelDeltaY as number | undefined, ag = performance.now();
@@ -10590,15 +10590,6 @@ index 188a12c8..c6442842 100644
        }
      });
  
-@@ -2924,7 +3062,7 @@ export class BoardRenderer {
-         // zoom-invariant, so forcing netLinesDirty here just rebuilt identical
-         // segments. Genuine changes set netLinesDirty at their own sites.
-         this.renderNetLines();
--        if (this.crossSideGhostParts.size > 0) this.renderCrossSideGhosts();
-+        if (this.crossSideGhostParts.size > 0 || boardStore.showGhosts) this.renderCrossSideGhosts();
-       }
-       this.needsRender = true;
-     }, 32);
 @@ -3110,6 +3248,21 @@ export class BoardRenderer {
      scene.bottomOutlineLayer.visible = showComponents && showOutlines;
      scene.topLabelLayer.visible      = showComponents && showLabels;
@@ -10621,15 +10612,6 @@ index 188a12c8..c6442842 100644
    }
  
    // --- Flip management ---
-@@ -3932,7 +4085,7 @@ export class BoardRenderer {
-         if (rotated || flipped || mirrored) {
-           this.netLinesDirty = true;
-           this.renderNetLines();
--          if (this.crossSideGhostParts.size > 0) this.renderCrossSideGhosts();
-+          if (this.crossSideGhostParts.size > 0 || boardStore.showGhosts) this.renderCrossSideGhosts();
-         }
- 
-         // A 0/180 ↔ 90/270 rotation transposes board vs screen axes, so the
 @@ -4084,8 +4237,12 @@ export class BoardRenderer {
          // honouring 'keep'/'auto' would centre it without unzooming and leave
          // most pins off-screen. Force a fit (snap) for nets; parts still obey
@@ -11144,69 +11126,7 @@ index 188a12c8..c6442842 100644
            for (const { start, end } of segs) {
              this.netLinesGfx.moveTo(start.x, start.y);
              this.netLinesGfx.lineTo(end.x, end.y);
-@@ -6870,6 +7212,14 @@ export class BoardRenderer {
-    *  animates `alpha = ghostAlpha`; the outline layer bakes at 1 and animates
-    *  `alpha = outlineAlpha`. Two layers because one Graphics has one alpha. */
-   private renderCrossSideGhosts() {
-+    // 2R 18/10/2026: sem os fantasmas originais (só da linha marcada, piscando em azul).
-+    // 2R 30/10/2026 (Roger: «ghost mantém na cor vermelha, todos os componentes do outro lado da placa aparecem em
-+    // transparência com a borda em vermelho neon»): com o botão Ghost ligado, TODOS os componentes do lado escondido
-+    // aparecem transparentes, contorno vermelho neon, parados (sem piscar).
-+    if (R2_SEM_FANTASMAS) {
-+      this.r2GhostOutroLado();
-+      return;
-+    }
-     if (this.crossSideGhostParts.size === 0 || !this.board) {
-       if (this.crossSideGhostBakeSig !== '') {
-         this.crossSideGhostGfx.clear();
-@@ -6891,6 +7241,46 @@ export class BoardRenderer {
-     this.needsRender = true;
-   }
- 
-+  private r2GhostOutroLado() {
-+    const on = !!this.board && boardStore.ghostMode !== 'off' && !boardStore.butterfly;
-+    if (!on) {
-+      if (this.crossSideGhostBakeSig !== '') {
-+        try { this.crossSideGhostGfx.clear(); this.crossSideGhostOutlineGfx.clear(); } catch { /* */ }
-+        this.crossSideGhostBakeSig = '';
-+        this.needsRender = true;
-+      }
-+      return;
-+    }
-+    const s = renderSettingsStore.settings;
-+    const b = this.board!;
-+    const sig = `r2|${b.parts.length}|${boardStore.showTop}|${boardStore.showBottom}|${s.selectionWidth}|${s.pinSizeScale}`
-+      + `|${this.activeScene ? 1 : 0}|${b.parts[0]?.name ?? ''}`;
-+    if (sig === this.crossSideGhostBakeSig) return;
-+    const fill = this.crossSideGhostGfx;
-+    const outline = this.crossSideGhostOutlineGfx;
-+    fill.clear();
-+    outline.clear();
-+    const NEON = 0xff1a3c;
-+    const w = Math.max(1, s.selectionWidth * 0.8);
-+    for (let i = 0; i < b.parts.length; i++) {
-+      const part = b.parts[i];
-+      if (!part || part.hidden || this.isPartVisible(part) || this.isTypeHidden(part.name)) continue;
-+      drawPartOutline(fill, part, s, 0);
-+      fill.fill({ color: NEON, alpha: 0.07 });
-+      drawPartOutline(outline, part, s, 0);
-+      outline.stroke({ width: w, color: NEON, alpha: 0.95 });
-+      for (const pin of part.pins) {
-+        const clamp = this.activeScene?.pinRadiusClamp.get(i) ?? Infinity;
-+        drawPinShape(fill, pin, Math.min(computePinRadius(s, pin.radius), clamp));
-+      }
-+      if (part.pins.length > 0) fill.fill({ color: NEON, alpha: 0.18 });
-+    }
-+    fill.alpha = 1;
-+    outline.alpha = 1;
-+    this.crossSideGhostBakeSig = sig;
-+    this.needsRender = true;
-+  }
-+
-   private bakeCrossSideGhosts(sig: string) {
-     const fill = this.crossSideGhostGfx;
-     const outline = this.crossSideGhostOutlineGfx;
-@@ -7566,7 +7956,9 @@ export class BoardRenderer {
+@@ -7566,7 +7908,9 @@ export class BoardRenderer {
        this.tooltipNetSpan.style.display = hasNet ? '' : 'none';
      }
      if (this.tooltipDetailSpan) {
@@ -11217,7 +11137,7 @@ index 188a12c8..c6442842 100644
      }
      // Cross-board compare line. Without it the board highlight only says
      // "this pin is different" and leaves you to go and find what it differs
-@@ -8464,8 +8856,16 @@ export class BoardRenderer {
+@@ -8464,8 +8808,16 @@ export class BoardRenderer {
  
    private zoomKeyboard(direction: ZoomDirection) {
      if (!this.viewport) return;
@@ -11236,7 +11156,7 @@ index 188a12c8..c6442842 100644
      const { keyboardZoomDelta } = renderSettingsStore.settings;
      const rawDelta = direction === 'in' ? -keyboardZoomDelta : keyboardZoomDelta;
      this.zoomAtScreen(cx, cy, rawDelta, true);
-@@ -8477,6 +8877,12 @@ export class BoardRenderer {
+@@ -8477,6 +8829,12 @@ export class BoardRenderer {
    }
  
    destroy() {
@@ -11249,7 +11169,7 @@ index 188a12c8..c6442842 100644
      this.destroyed = true;
      // destroy() is the full-teardown path (tab closed) and does NOT route
      // through teardownForReinit() — unregister here too, or a closed tab's
-@@ -8499,6 +8905,7 @@ export class BoardRenderer {
+@@ -8499,6 +8857,7 @@ export class BoardRenderer {
      this.unsubscribeSettings?.();
      this.unsubscribeResizeMode?.();
      this.unsubscribeTheme?.();
@@ -11728,7 +11648,7 @@ index bc34fabb..7725702f 100644
  export function stepExpApproach(current: number, target: number, dtMs: number, rate: number): number {
    const delta = target - current;
 diff --git a/src/frontend/src/store/board-store.ts b/src/frontend/src/store/board-store.ts
-index e4d5a707..ef6b6dbe 100644
+index e4d5a707..5627e99c 100644
 --- a/src/frontend/src/store/board-store.ts
 +++ b/src/frontend/src/store/board-store.ts
 @@ -19,6 +19,7 @@ import { deriveBoardView } from './derive-board-view';
@@ -11787,16 +11707,14 @@ index e4d5a707..ef6b6dbe 100644
  class BoardStore extends Emitter {
    private _tabs: BoardTab[] = [];
    private _activeTabId: number | null = null;
-@@ -790,7 +818,8 @@ class BoardStore extends Emitter {
+@@ -790,6 +818,7 @@ class BoardStore extends Emitter {
    get showPins(): boolean { return this.activeTab?.showPins ?? true; }
    get showOutlines(): boolean { return this.activeTab?.showOutlines ?? true; }
    get showLabels(): boolean { return this.activeTab?.showLabels ?? true; }
--  get ghostMode(): GhostMode { return this.activeTab?.ghostMode ?? 'ghosts'; }
-+  // 2R 30/10/2026 (Roger: «voltar a função ghost… botão ao lado do bottom, top, butterfly»): volta a valer o modo da aba
-+  get ghostMode(): GhostMode { return this.activeTab?.ghostMode ?? 'off'; }
++  // 2R 30/10/2026 (Roger: «restaura o ghost na íntegra do projeto original do 0.50»): igual ao upstream
+   get ghostMode(): GhostMode { return this.activeTab?.ghostMode ?? 'ghosts'; }
    get showGhosts(): boolean { return this.ghostMode !== 'off'; }
    get discoHighlight(): boolean { return this.ghostMode === 'disco'; }
-   get hideGhosts(): boolean { return this.activeTab?.hideGhosts ?? false; }
 @@ -965,6 +994,10 @@ class BoardStore extends Emitter {
      this.notify();
    }
@@ -11808,15 +11726,6 @@ index e4d5a707..ef6b6dbe 100644
    private updateActiveTab(patch: Partial<BoardTab>) {
      const tab = this.activeTab;
      if (!tab) return;
-@@ -1004,7 +1037,7 @@ class BoardStore extends Emitter {
-       showPins: true,
-       showOutlines: true,
-       showLabels: true,
--      ghostMode: 'ghosts',
-+      ghostMode: 'off',
-       layerStates: [],
-       selectedLayerIndex: null,
-       fixatedLayerIndex: null,
 @@ -1268,6 +1301,12 @@ class BoardStore extends Emitter {
  
    async loadFiles(files: FileList | File[]) {
@@ -11830,15 +11739,6 @@ index e4d5a707..ef6b6dbe 100644
      // Plain-ASC boards arrive as the three files the sections are named after
      // — format.asc / nails.asc / pins.asc (issue #26). Selecting them together
      // means "this is one board", not "open three tabs", so bundle them back
-@@ -1367,7 +1406,7 @@ class BoardStore extends Emitter {
-       showPins: true,
-       showOutlines: true,
-       showLabels: true,
--      ghostMode: 'ghosts',
-+      ghostMode: 'off',
-       layerStates: [],
-       selectedLayerIndex: null,
-       fixatedLayerIndex: null,
 @@ -2307,10 +2346,11 @@ class BoardStore extends Emitter {
    cycleDimMode() {
      const tab = this.activeTab;

@@ -1,0 +1,146 @@
+From 5b50ecf07100bab38b30d4aa9486e5f4ef9ebb91 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 05:11:07 -0300
+Subject: [PATCH 32/32] =?UTF-8?q?r2:=20ghost=20do=20upstream=200.50=20de?=
+ =?UTF-8?q?=20volta=20na=20=C3=ADntegra=20(fantasmas=20da=20linha=20marcad?=
+ =?UTF-8?q?a,=20Disco,=20padr=C3=A3o=20ligado)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/renderer/BoardRenderer.ts | 54 ++--------------------
+ src/frontend/src/store/board-store.ts      |  8 ++--
+ 2 files changed, 7 insertions(+), 55 deletions(-)
+
+diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
+index c6442842..7cf392fe 100644
+--- a/src/frontend/src/renderer/BoardRenderer.ts
++++ b/src/frontend/src/renderer/BoardRenderer.ts
+@@ -385,7 +385,7 @@ export function mouseZoomSpeed(): number {
+ }
+ /* eslint-disable @typescript-eslint/no-explicit-any */
+ const r2w = window as any;
+-const R2_SEM_FANTASMAS = true;
++const R2_SEM_FANTASMAS = false; // 2R 30/10/2026: ghost do upstream 0.50 de volta, na íntegra
+ /** 2R 22/10/2026: roda do MOUSE (wheelDeltaY múltiplo de 120, sem giro lateral, sem trackpad nos últimos 400 ms) */
+ function r2RodaDoMouse(e: WheelEvent): boolean {
+   const w = (e as any).wheelDeltaY as number | undefined, ag = performance.now();
+@@ -3062,7 +3062,7 @@ export class BoardRenderer {
+         // zoom-invariant, so forcing netLinesDirty here just rebuilt identical
+         // segments. Genuine changes set netLinesDirty at their own sites.
+         this.renderNetLines();
+-        if (this.crossSideGhostParts.size > 0 || boardStore.showGhosts) this.renderCrossSideGhosts();
++        if (this.crossSideGhostParts.size > 0) this.renderCrossSideGhosts();
+       }
+       this.needsRender = true;
+     }, 32);
+@@ -4085,7 +4085,7 @@ export class BoardRenderer {
+         if (rotated || flipped || mirrored) {
+           this.netLinesDirty = true;
+           this.renderNetLines();
+-          if (this.crossSideGhostParts.size > 0 || boardStore.showGhosts) this.renderCrossSideGhosts();
++          if (this.crossSideGhostParts.size > 0) this.renderCrossSideGhosts();
+         }
+ 
+         // A 0/180 ↔ 90/270 rotation transposes board vs screen axes, so the
+@@ -7212,14 +7212,6 @@ export class BoardRenderer {
+    *  animates `alpha = ghostAlpha`; the outline layer bakes at 1 and animates
+    *  `alpha = outlineAlpha`. Two layers because one Graphics has one alpha. */
+   private renderCrossSideGhosts() {
+-    // 2R 18/10/2026: sem os fantasmas originais (só da linha marcada, piscando em azul).
+-    // 2R 30/10/2026 (Roger: «ghost mantém na cor vermelha, todos os componentes do outro lado da placa aparecem em
+-    // transparência com a borda em vermelho neon»): com o botão Ghost ligado, TODOS os componentes do lado escondido
+-    // aparecem transparentes, contorno vermelho neon, parados (sem piscar).
+-    if (R2_SEM_FANTASMAS) {
+-      this.r2GhostOutroLado();
+-      return;
+-    }
+     if (this.crossSideGhostParts.size === 0 || !this.board) {
+       if (this.crossSideGhostBakeSig !== '') {
+         this.crossSideGhostGfx.clear();
+@@ -7241,46 +7233,6 @@ export class BoardRenderer {
+     this.needsRender = true;
+   }
+ 
+-  private r2GhostOutroLado() {
+-    const on = !!this.board && boardStore.ghostMode !== 'off' && !boardStore.butterfly;
+-    if (!on) {
+-      if (this.crossSideGhostBakeSig !== '') {
+-        try { this.crossSideGhostGfx.clear(); this.crossSideGhostOutlineGfx.clear(); } catch { /* */ }
+-        this.crossSideGhostBakeSig = '';
+-        this.needsRender = true;
+-      }
+-      return;
+-    }
+-    const s = renderSettingsStore.settings;
+-    const b = this.board!;
+-    const sig = `r2|${b.parts.length}|${boardStore.showTop}|${boardStore.showBottom}|${s.selectionWidth}|${s.pinSizeScale}`
+-      + `|${this.activeScene ? 1 : 0}|${b.parts[0]?.name ?? ''}`;
+-    if (sig === this.crossSideGhostBakeSig) return;
+-    const fill = this.crossSideGhostGfx;
+-    const outline = this.crossSideGhostOutlineGfx;
+-    fill.clear();
+-    outline.clear();
+-    const NEON = 0xff1a3c;
+-    const w = Math.max(1, s.selectionWidth * 0.8);
+-    for (let i = 0; i < b.parts.length; i++) {
+-      const part = b.parts[i];
+-      if (!part || part.hidden || this.isPartVisible(part) || this.isTypeHidden(part.name)) continue;
+-      drawPartOutline(fill, part, s, 0);
+-      fill.fill({ color: NEON, alpha: 0.07 });
+-      drawPartOutline(outline, part, s, 0);
+-      outline.stroke({ width: w, color: NEON, alpha: 0.95 });
+-      for (const pin of part.pins) {
+-        const clamp = this.activeScene?.pinRadiusClamp.get(i) ?? Infinity;
+-        drawPinShape(fill, pin, Math.min(computePinRadius(s, pin.radius), clamp));
+-      }
+-      if (part.pins.length > 0) fill.fill({ color: NEON, alpha: 0.18 });
+-    }
+-    fill.alpha = 1;
+-    outline.alpha = 1;
+-    this.crossSideGhostBakeSig = sig;
+-    this.needsRender = true;
+-  }
+-
+   private bakeCrossSideGhosts(sig: string) {
+     const fill = this.crossSideGhostGfx;
+     const outline = this.crossSideGhostOutlineGfx;
+diff --git a/src/frontend/src/store/board-store.ts b/src/frontend/src/store/board-store.ts
+index ef6b6dbe..5627e99c 100644
+--- a/src/frontend/src/store/board-store.ts
++++ b/src/frontend/src/store/board-store.ts
+@@ -818,8 +818,8 @@ class BoardStore extends Emitter {
+   get showPins(): boolean { return this.activeTab?.showPins ?? true; }
+   get showOutlines(): boolean { return this.activeTab?.showOutlines ?? true; }
+   get showLabels(): boolean { return this.activeTab?.showLabels ?? true; }
+-  // 2R 30/10/2026 (Roger: «voltar a função ghost… botão ao lado do bottom, top, butterfly»): volta a valer o modo da aba
+-  get ghostMode(): GhostMode { return this.activeTab?.ghostMode ?? 'off'; }
++  // 2R 30/10/2026 (Roger: «restaura o ghost na íntegra do projeto original do 0.50»): igual ao upstream
++  get ghostMode(): GhostMode { return this.activeTab?.ghostMode ?? 'ghosts'; }
+   get showGhosts(): boolean { return this.ghostMode !== 'off'; }
+   get discoHighlight(): boolean { return this.ghostMode === 'disco'; }
+   get hideGhosts(): boolean { return this.activeTab?.hideGhosts ?? false; }
+@@ -1037,7 +1037,7 @@ class BoardStore extends Emitter {
+       showPins: true,
+       showOutlines: true,
+       showLabels: true,
+-      ghostMode: 'off',
++      ghostMode: 'ghosts',
+       layerStates: [],
+       selectedLayerIndex: null,
+       fixatedLayerIndex: null,
+@@ -1406,7 +1406,7 @@ class BoardStore extends Emitter {
+       showPins: true,
+       showOutlines: true,
+       showLabels: true,
+-      ghostMode: 'off',
++      ghostMode: 'ghosts',
+       layerStates: [],
+       selectedLayerIndex: null,
+       fixatedLayerIndex: null,
+-- 
+2.43.0
+

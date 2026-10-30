@@ -1,7 +1,7 @@
 From 938ae7ed8a09d49a76ff1417c4f7359e0facee4a Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:38:59 -0300
-Subject: [PATCH 14/31] 2R port p16 overlay slots
+Subject: [PATCH 14/32] 2R port p16 overlay slots
 
 ---
  .../src/components/overlay/slot-renderers.tsx | 30 +++++++++++++++++--

@@ -1,7 +1,7 @@
 From 86a4d4b2673d7fb591f71ae6015be93fd990611c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:47:53 -0300
-Subject: [PATCH 21/31] 2R port CSS + ajustes
+Subject: [PATCH 21/32] 2R port CSS + ajustes
 
 ---
  src/frontend/src/index.css | 504 ++++++++++++++++++++++++++++++++++++-
