@@ -2093,13 +2093,15 @@ window.__r2Esp = function (d, st) {
           if (BOX && BOX.parentNode === c) return BOX;
           if (getComputedStyle(c).position === 'static') c.style.position = 'relative';
           BOX = document.createElement('div'); BOX.id = 'r2tb';
-          BOX.innerHTML = '<button data-l="top" title="Mostrar o lado de cima (TOP)">TOP</button><button data-l="bottom" title="Mostrar o lado de baixo (BOTTOM)">BOTTOM</button><button data-l="bf" title="Butterfly: os dois lados lado a lado">BUTTERFLY</button>';
+          BOX.innerHTML = '<button data-l="top" title="Mostrar o lado de cima (TOP)">TOP</button><button data-l="bottom" title="Mostrar o lado de baixo (BOTTOM)">BOTTOM</button><button data-l="bf" title="Butterfly: os dois lados lado a lado">BUTTERFLY</button><button data-l="gh" title="Ghost: os componentes do outro lado da placa aparecem transparentes, com contorno vermelho neon">GHOST</button>';
           ['pointerdown', 'mousedown', 'wheel', 'dblclick'].forEach(function (ev) { BOX.addEventListener(ev, function (e) { e.stopPropagation(); }); });
           BOX.querySelectorAll('button').forEach(function (b) {
             b.onclick = function (e) {
               e.stopPropagation();
               var u = U(), t = u && u.activeTab; if (!t || !t.board) return;
               if (b.dataset.l === 'bf') { try { if (!t.butterfly) u.toggleButterfly(); } catch (x) {} pinta(); return; }
+              /* 30/10/2026 (Roger: «voltar a função ghost… botão ao lado do bottom, top, butterfly… vermelho neon»): liga/desliga */
+              if (b.dataset.l === 'gh') { try { u.updateActiveTab({ ghostMode: (t.ghostMode && t.ghostMode !== 'off') ? 'off' : 'ghosts' }); u.notify(); } catch (x) {} pinta(); return; }
               var top = b.dataset.l === 'top';
               try { if (t.butterfly) u.toggleButterfly(); u.updateActiveTab({ showTop: top, showBottom: !top, butterfly: false }); u.notify(); } catch (x) {}
               pinta();
@@ -2164,11 +2166,12 @@ window.__r2Esp = function (d, st) {
           var u = U(), t = u && u.activeTab;
           bx.style.display = t && t.board ? '' : 'none';
           if (!t || !t.board) return;
-          var k = cores(), bf = !!t.butterfly, chave = [t.showTop, t.showBottom, bf, k.top, k.bot].join('|');
+          var k = cores(), bf = !!t.butterfly, gh = !!(t.ghostMode && t.ghostMode !== 'off'), chave = [t.showTop, t.showBottom, bf, gh, k.top, k.bot].join('|');
           if (chave === ult) return; ult = chave;
           var bt = bx.querySelector('[data-l="top"]'), bb = bx.querySelector('[data-l="bottom"]'), bu = bx.querySelector('[data-l="bf"]');
           bt.style.setProperty('--c', k.top); bb.style.setProperty('--c', k.bot); bu.style.setProperty('--c', '#E6E8EB');
           bt.classList.toggle('on', !bf && !!t.showTop); bb.classList.toggle('on', !bf && !!t.showBottom); bu.classList.toggle('on', bf);
+          var bg = bx.querySelector('[data-l="gh"]'); if (bg) { bg.style.setProperty('--c', '#FF1A3C'); bg.classList.toggle('on', gh); }
         }
         setInterval(pinta, 400);
       })();
