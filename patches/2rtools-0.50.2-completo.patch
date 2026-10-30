@@ -592,6 +592,59 @@ index 84c89fb5..4085cd5a 100644
                const isSelected = selection.pinIndex === idx;
                const isNetHighlighted = selection.highlightedNet === pin.net && pin.net !== '';
                const obdNets = obd.hasData ? obd.lookup(pin.net) : [];
+diff --git a/src/frontend/src/components/ContextMenu.tsx b/src/frontend/src/components/ContextMenu.tsx
+index 494df8dc..da6a6d77 100644
+--- a/src/frontend/src/components/ContextMenu.tsx
++++ b/src/frontend/src/components/ContextMenu.tsx
+@@ -644,6 +644,32 @@ export function ContextMenu() {
+       );
+     })() : null;
+ 
++    // 2R 30/10/2026 (Roger: «quando clicar em cima de uma linha ou componente, ter a opção de buscar na placa
++    // doadora e daí abre o painel completo»): abre a busca de placa doadora já com o componente ou a linha
++    const doadora = (termo: string) => (e: React.MouseEvent) => {
++      e.stopPropagation();
++      contextMenuStore.hide();
++      window.dispatchEvent(new CustomEvent('r2-doadora', { detail: { q: termo } }));
++    };
++    const temDoadora = !!(window as unknown as { __2rAcervo?: { pecas?: unknown } }).__2rAcervo?.pecas;
++    const doadoraItems = temDoadora && (componentName.trim() || state.netName) ? (
++      <React.Fragment key="r2-doadora">
++        {componentName.trim() && (
++          <div className="context-menu-item context-menu-search-donors" onClick={doadora(componentName.trim())}
++               data-testid="ctx-doadora-peca" title="Em quais placas do Acervo 2R existe esta posição">
++            Placa doadora: buscar &apos;{componentName}&apos;
++          </div>
++        )}
++        {state.netName && (
++          <div className="context-menu-item context-menu-search-donors" onClick={doadora(state.netName)}
++               data-testid="ctx-doadora-linha" title="Em quais placas do Acervo 2R existe esta linha">
++            Placa doadora: buscar a linha &apos;{state.netName}&apos;
++          </div>
++        )}
++        <div className="context-menu-separator" />
++      </React.Fragment>
++    ) : null;
++
+     const nothingToSearch =
+       boundOpen.length === 0 &&
+       otherPdfNames.length === 0 &&
+@@ -653,6 +679,7 @@ export function ContextMenu() {
+       // Still show the "Search all donors" escape hatch when no PDFs are open.
+       return (
+         <>
++          {doadoraItems}
+           {partVisibilityItems}
+           <div className="context-menu-item disabled">
+             Search &apos;{componentName}&apos; in PDF (none open)
+@@ -674,6 +701,7 @@ export function ContextMenu() {
+     }
+ 
+     const sections: React.ReactNode[] = [];
++    if (doadoraItems) sections.push(doadoraItems);
+     if (partVisibilityItems) sections.push(partVisibilityItems);
+ 
+     // Helper: emit one donor row for a PDF. The row click triggers the
 diff --git a/src/frontend/src/components/DiagnosisNotes.tsx b/src/frontend/src/components/DiagnosisNotes.tsx
 index dadf4011..3287da12 100644
 --- a/src/frontend/src/components/DiagnosisNotes.tsx
@@ -627,9 +680,216 @@ index dadf4011..3287da12 100644
            borderRadius: 3,
            marginTop: 2,
            fontFamily: 'monospace',
+diff --git a/src/frontend/src/components/DoadoraBusca2R.tsx b/src/frontend/src/components/DoadoraBusca2R.tsx
+new file mode 100644
+index 00000000..57d88cbe
+--- /dev/null
++++ b/src/frontend/src/components/DoadoraBusca2R.tsx
+@@ -0,0 +1,201 @@
++import { useEffect, useRef, useState } from 'react';
++import { createPortal } from 'react-dom';
++import { boardStore } from '../store/board-store';
++import { uiZoom } from '../store/ui-zoom';
++
++/**
++ * 2R Tools — busca de placa doadora (Roger, 30/10/2026: «preciso ter uma busca geral em placa doadora, procurar
++ * componentes… essa busca pode ser no acervo online e acervo local… escolher e limitar 20 resultados»).
++ * Código da peça (CD3217B12), posição (U8100) ou linha (PP3V3_G3H) → até 20 placas do Acervo 2R; o clique (ou Enter)
++ * abre a placa com a peça marcada. Quem responde é o SDS (window.__2rAcervo.pecas → core/acervo_pecas.py).
++ */
++type Row = { id: string; pdf: string; board: string; model: string; name: string; pos: string[]; n: number;
++             baixada: boolean; kind: string; fonte: string };
++type Res = { rows: Row[]; total?: number; tipo?: string; online?: boolean; erro?: string };
++type Api = { pecas?: (q: string, onde: string) => Promise<Res>; open: (id: string) => Promise<unknown>;
++             aprende?: (d: unknown) => Promise<unknown> };
++const api = (): Api | undefined => (window as unknown as { __2rAcervo?: Api }).__2rAcervo;
++
++type Onde = 'online' | 'local' | 'ambos';
++const ONDE_KEY = '2r-doadora-onde';
++const lerOnde = (): Onde => { try { const v = localStorage.getItem(ONDE_KEY); return v === 'online' || v === 'local' ? v : 'ambos'; } catch { return 'ambos'; } };
++
++// ── depois de abrir: marca a peça/linha assim que a placa carregar ──
++let pendente: { alvos: string[]; linha: boolean; ate: number } | null = null;
++function tentarMarcar(): boolean {
++  if (!pendente) return true;
++  if (Date.now() > pendente.ate) { pendente = null; return true; }
++  const b = boardStore.board;
++  if (!b) return false;
++  if (pendente.linha) {
++    const nome = pendente.alvos.find(n => b.nets.has(n)) ?? [...b.nets.keys()].find(n => pendente!.alvos.some(a => n.toUpperCase().startsWith(a)));
++    if (!nome) return false;
++    boardStore.focusNet(nome);
++  } else {
++    const nomes = new Set(b.parts.map(p => p.name.toUpperCase()));
++    const alvo = pendente.alvos.find(a => nomes.has(a));
++    if (!alvo) return false;
++    const real = b.parts.find(p => p.name.toUpperCase() === alvo)!.name;
++    boardStore.focusPart(real);
++  }
++  pendente = null;
++  return true;
++}
++
++// ── toda placa aberta ensina as posições e linhas dela (busca local) ──
++let ensinou = '';
++function ensinar() {
++  const b = boardStore.board, t = boardStore.activeTab, a = api();
++  if (!b || !t || !a?.aprende) return;
++  const chave = t.fileName + ':' + b.parts.length;
++  if (chave === ensinou) return;
++  ensinou = chave;
++  void a.aprende({ name: t.fileName, parts: b.parts.map(p => p.name), nets: [...b.nets.keys()] });
++}
++
++let instalado = false;
++function instalar() {
++  if (instalado) return;
++  instalado = true;
++  boardStore.subscribe(() => {
++    if (pendente) tentarMarcar();
++    window.setTimeout(ensinar, 1500);
++  });
++}
++
++export function DoadoraBusca2R() {
++  const [q, setQ] = useState('');
++  const [onde, setOnde] = useState<Onde>(lerOnde);
++  const [res, setRes] = useState<Res | null>(null);
++  const [busy, setBusy] = useState(false);
++  const [open, setOpen] = useState(false);
++  const [sel, setSel] = useState(0);
++  const [abrindo, setAbrindo] = useState('');
++  const wrap = useRef<HTMLDivElement | null>(null);
++  const inp = useRef<HTMLInputElement | null>(null);
++  const pop = useRef<HTMLDivElement | null>(null);
++  const seq = useRef(0);
++
++  useEffect(() => { instalar(); }, []);
++  useEffect(() => {                                   // botão direito numa peça/linha: abre já buscando
++    const ev = (e: Event) => {
++      const termo = String((e as CustomEvent).detail?.q || '').trim();
++      if (!termo) return;
++      setQ(termo); setOpen(true);
++      window.setTimeout(() => inp.current?.focus(), 50);
++    };
++    window.addEventListener('r2-doadora', ev);
++    return () => window.removeEventListener('r2-doadora', ev);
++  }, []);
++  useEffect(() => { try { localStorage.setItem(ONDE_KEY, onde); } catch { /* */ } }, [onde]);
++
++  useEffect(() => {
++    const termo = q.trim();
++    if (termo.length < 3 || !api()?.pecas) { setRes(null); setBusy(false); return; }
++    const n = ++seq.current;
++    setBusy(true);
++    const t = window.setTimeout(() => {
++      api()!.pecas!(termo, onde).then(r => { if (n === seq.current) { setRes(r); setSel(0); setOpen(true); } })
++        .catch(() => { if (n === seq.current) setRes({ rows: [], erro: 'sem resposta do SDS' }); })
++        .finally(() => { if (n === seq.current) setBusy(false); });
++    }, 280);
++    return () => window.clearTimeout(t);
++  }, [q, onde]);
++
++  useEffect(() => {
++    if (!open) return;
++    const fora = (e: MouseEvent) => {
++      const t = e.target as Node;
++      if (wrap.current?.contains(t) || pop.current?.contains(t)) return;
++      setOpen(false);
++    };
++    document.addEventListener('mousedown', fora);
++    return () => document.removeEventListener('mousedown', fora);
++  }, [open]);
++
++  const abrir = async (r: Row) => {
++    const a = api();
++    if (!a) return;
++    const termo = q.trim().toUpperCase().replace(/\s+/g, '');
++    const linha = res?.tipo === 'linha';
++    const alvos = r.pos.length ? r.pos : [termo];
++    pendente = alvos.length ? { alvos, linha, ate: Date.now() + 60000 } : null;
++    setAbrindo(r.id);
++    try { await a.open(r.id); } finally { window.setTimeout(() => setAbrindo(''), 1500); }
++    setOpen(false);
++    let tent = 0;                                     // a placa pode já estar aberta (nenhuma notificação nova)
++    const loop = () => { if (!tentarMarcar() && ++tent < 120) window.setTimeout(loop, 500); };
++    window.setTimeout(loop, 400);
++    if (alvos.length) boardStore.addToast(linha ? `Abrindo a placa com a linha ${termo} marcada…`
++      : `Abrindo a placa com ${alvos.slice(0, 3).join(' · ')} marcada${alvos.length > 1 ? 's' : ''}…`, 'info');
++  };
++
++  const rows = res?.rows ?? [];
++  const onKey = (e: React.KeyboardEvent) => {
++    if (e.key === 'ArrowDown') { setOpen(true); setSel(s => Math.min(rows.length - 1, s + 1)); e.preventDefault(); }
++    else if (e.key === 'ArrowUp') { setSel(s => Math.max(0, s - 1)); e.preventDefault(); }
++    else if (e.key === 'Enter') { if (rows[sel]) void abrir(rows[sel]); e.preventDefault(); }
++    else if (e.key === 'Escape') { setOpen(false); }
++    e.stopPropagation();
++  };
++
++  const rect = wrap.current?.getBoundingClientRect();
++  const z = uiZoom();
++  const tipoTxt = res?.tipo === 'posicao' ? 'posição' : res?.tipo === 'linha' ? 'linha' : 'código da peça';
++  const ondeTxt = onde === 'online' ? 'Acervo online' : onde === 'local' ? 'Acervo local (baixadas)' : 'Acervo online + local';
++
++  return (
++    <div className="r2-doadora" ref={wrap} data-testid="doadora-busca"
++         title="Placa doadora: em quais placas do Acervo 2R existe a peça — código (CD3217B12), posição (U8100) ou linha (PP3V3_G3H)">
++      {/* na barra só o botão (a barra já tem os ícones e a busca); o campo fica na janelinha */}
++      <button className={`r2-doadora-btn ${open ? 'on' : ''}`} data-testid="doadora-btn"
++              onClick={() => { setOpen(o => !o); window.setTimeout(() => inp.current?.focus(), 30); }}>
++        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
++             strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
++        PLACA DOADORA
++      </button>
++      {open && rect && createPortal(
++        <div className="r2-doadora-pop" ref={pop} data-testid="doadora-pop"
++             style={{ left: Math.max(8, Math.min(rect.left / z, window.innerWidth / z - 628)), top: rect.bottom / z + 6, width: 620 }}>
++          {/* onde procurar: dentro da lista para não apertar a barra (que já tem os ícones e a busca) */}
++          <div className="r2-doadora-topo">
++            <input ref={inp} className="r2-doadora-in" value={q} placeholder="código da peça, posição ou linha"
++                   spellCheck={false} autoCorrect="off" autoCapitalize="characters" autoFocus
++                   onChange={e => setQ(e.target.value)} onKeyDown={onKey} data-testid="doadora-input" />
++            <div className="r2-doadora-seg" role="group">
++              {(['online', 'local', 'ambos'] as Onde[]).map(o => (
++                <button key={o} className={onde === o ? 'on' : ''} onClick={() => setOnde(o)} data-testid={`doadora-${o}`}
++                        title={o === 'online' ? 'Todo o Acervo 2R' : o === 'local' ? 'Só as placas já baixadas neste computador' : 'Online e local'}>
++                  {o === 'online' ? 'ONLINE' : o === 'local' ? 'LOCAL' : 'OS DOIS'}
++                </button>
++              ))}
++            </div>
++            <span className="r2-doadora-max">máx. 20 placas</span>
++          </div>
++          {q.trim().length < 3 ? <div className="r2-doadora-vazio">Exemplos: CD3217B12 (código da peça), U8100 (posição) ou PP3V3_G3H (linha).</div> : <>
++          <div className="r2-doadora-head">
++            {busy ? 'Procurando…' : res?.erro ? `Não consegui buscar: ${res.erro}`
++              : <>{rows.length}{(res?.total ?? 0) > rows.length ? ` de ${res!.total}` : ''} placa{rows.length === 1 ? '' : 's'} com <b>{q.trim().toUpperCase()}</b> · {tipoTxt} · {ondeTxt}</>}
++          </div>
++          {rows.map((r, i) => (
++            <button key={r.id} className={`r2-doadora-row ${i === sel ? 'sel' : ''}`} onMouseEnter={() => setSel(i)}
++                    onClick={() => void abrir(r)} data-testid="doadora-row" title={r.name}>
++              <span className="r2-dr-board">{r.board || r.name}</span>
++              <span className="r2-dr-model">{r.model}</span>
++              <span className="r2-dr-pos">{r.pos.join(' · ')}</span>
++              <span className="r2-dr-n">{abrindo === r.id ? 'abrindo…' : `${r.n} peça${r.n === 1 ? '' : 's'}`}</span>
++              <span className={`r2-dr-tag ${r.baixada ? 'ok' : ''}`}>{r.baixada ? 'BAIXADA' : '☁ NUVEM'}</span>
++            </button>
++          ))}
++          {!busy && !res?.erro && rows.length === 0 && (
++            <div className="r2-doadora-vazio">
++              Nenhuma placa com esse termo{onde === 'local' ? ' entre as baixadas' : ''}.
++              {res && res.online === false ? ' O índice de peças do acervo online ainda não foi gerado — por enquanto a busca usa as placas já abertas neste computador (posição e linha).' : ''}
++            </div>
++          )}
++          </>}
++          <div className="r2-doadora-pe">Enter ou clique: abre a placa com a peça marcada · também busca posição (U8100) e linha (PP3V3_G3H)</div>
++        </div>, document.body)}
++    </div>
++  );
++}
 diff --git a/src/frontend/src/components/GuideHud.tsx b/src/frontend/src/components/GuideHud.tsx
 new file mode 100644
-index 00000000..0725dc50
+index 00000000..7d8bc3b2
 --- /dev/null
 +++ b/src/frontend/src/components/GuideHud.tsx
 @@ -0,0 +1,67 @@
@@ -656,7 +916,7 @@ index 00000000..0725dc50
 +  const r = guideStore.current();
 +  if (!r) return null;
 +  const pt = r.points.length ? r.points[guideStore.pointIdx % r.points.length] : null;
-+  const tab = boardStore.activeTab, sel = tab?.selection;
++  const tab = guideStore.tab() ?? boardStore.activeTab, sel = tab?.selection;   // 2R 29/10: a placa do estudo
 +  const sp = tab?.board && sel?.partIndex != null && sel.pinIndex != null && sel.pinIndex >= 0 ? tab.board.parts[sel.partIndex] : null;
 +  const selLabel = sp ? `${sp.name}.${sp.pins[sel!.pinIndex!].number || sp.pins[sel!.pinIndex!].name}` : '';
 +  const ball = pt && tab?.board ? bgaBall(tab.board.parts[pt.partIndex], pt.pinIndex) : null;
@@ -1842,15 +2102,16 @@ index 00000000..6fab3e3e
 +  );
 +}
 diff --git a/src/frontend/src/components/Toolbar.tsx b/src/frontend/src/components/Toolbar.tsx
-index 9cbfd041..cdc3c5d7 100644
+index 9cbfd041..c2b41eb3 100644
 --- a/src/frontend/src/components/Toolbar.tsx
 +++ b/src/frontend/src/components/Toolbar.tsx
-@@ -2,6 +2,12 @@ import { useRef, useEffect, useState, useCallback, useLayoutEffect } from 'react
+@@ -2,6 +2,13 @@ import { useRef, useEffect, useState, useCallback, useLayoutEffect } from 'react
  import { createPortal } from 'react-dom';
  import { IconBoxMultiple, IconLayoutBoardSplit, IconUpload, IconDownload, IconInfoCircle } from '@tabler/icons-react';
  import { boardStore } from '../store/board-store';
 +import { IS_2R } from '../r2/env';
 +import { MenuBar2R } from './MenuBar2R';
++import { DoadoraBusca2R } from './DoadoraBusca2R';
 +import logo2r from '../assets/2r-logo.png';
 +import { NavBar2R } from './NavBar2R';
 +import { PinSearch } from './ScopedSearch2R';
@@ -1858,7 +2119,7 @@ index 9cbfd041..cdc3c5d7 100644
  import { useBoardStore } from '../hooks/useBoardStore';
  import { useUpdateStore } from '../hooks/useUpdateStore';
  import { showSidebarTab } from './Sidebar.utils';
-@@ -22,6 +28,7 @@ const COARSE_POINTER = typeof window !== 'undefined' && typeof window.matchMedia
+@@ -22,6 +29,7 @@ const COARSE_POINTER = typeof window !== 'undefined' && typeof window.matchMedia
    && window.matchMedia('(pointer: coarse)').matches;
  import { setLibrarySearch } from '../panels/LibraryPanel';
  import { countInBoardTab, countInPdf, findInBoardTab, findInPdf } from '../store/cross-target-search';
@@ -1866,7 +2127,7 @@ index 9cbfd041..cdc3c5d7 100644
  import { SearchScopeBadge, type SearchScope } from './SearchScopeBadge';
  import { isTwoWindowMode, toggleTwoWindowMode, onTwoWindowModeChange } from '../store/two-window-mode';
  import { uiZoom } from '../store/ui-zoom';
-@@ -370,7 +377,39 @@ function openLibraryHit(f: DatabankFile): void {
+@@ -370,7 +378,39 @@ function openLibraryHit(f: DatabankFile): void {
  }
  
  /** Global search — searches board tabs, open PDFs, and library. Shows per-tab dropdown. */
@@ -1907,7 +2168,7 @@ index 9cbfd041..cdc3c5d7 100644
    const inputRef = useRef<HTMLInputElement>(null);
    const wrapRef = useRef<HTMLDivElement>(null);
    const [query, setQuery] = useState('');
-@@ -445,6 +484,18 @@ function GlobalSearch() {
+@@ -445,6 +485,18 @@ function GlobalSearch() {
      setOpen(true);
    }, []);
  
@@ -1926,7 +2187,7 @@ index 9cbfd041..cdc3c5d7 100644
    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
      const v = e.target.value;
      setQuery(v);
-@@ -452,25 +503,48 @@ function GlobalSearch() {
+@@ -452,25 +504,48 @@ function GlobalSearch() {
      debounceRef.current = setTimeout(() => runSearch(v), 250);
    };
  
@@ -1979,7 +2240,7 @@ index 9cbfd041..cdc3c5d7 100644
            {groups.map(group => {
              const groupItems = results.filter(r => r.group === group);
              if (groupItems.length === 0) return null;
-@@ -531,6 +605,7 @@ function GlobalSearch() {
+@@ -531,6 +606,7 @@ function GlobalSearch() {
            )}
          </div>
        )}
@@ -1987,7 +2248,7 @@ index 9cbfd041..cdc3c5d7 100644
      </div>
    );
  }
-@@ -667,26 +742,36 @@ export function Toolbar() {
+@@ -667,26 +743,38 @@ export function Toolbar() {
            centre, window mode / about / version on the right. Side, rotate,
            mirror, butterfly and traces live in the board ribbon now — same
            store actions, same shortcuts, only the button's home moved. ── */}
@@ -2016,6 +2277,8 @@ index 9cbfd041..cdc3c5d7 100644
 +
 +      {/* ── Search, centred ── (2R: à direita, com escopo «Tudo / No componente») */}
        <div className="toolbar-spacer" />
++      {/* 2R 30/10/2026: busca de placa doadora (código da peça, posição ou linha no Acervo 2R) */}
++      {IS_2R && <DoadoraBusca2R />}
 +      {IS_2R ? <Search2R /> : <GlobalSearch />}
 +      {IS_2R && <ThemeButton2R />}
 +      {!IS_2R && <div className="toolbar-spacer" />}
@@ -2030,7 +2293,7 @@ index 9cbfd041..cdc3c5d7 100644
          <button
            onClick={() => toggleTwoWindowMode()}
            className={`toolbar-btn toolbar-quiet ${twoWindow ? 'active' : ''}`}
-@@ -698,9 +783,10 @@ export function Toolbar() {
+@@ -698,9 +786,10 @@ export function Toolbar() {
            {twoWindow
              ? <IconBoxMultiple size={16} stroke={1.75} />
              : <IconLayoutBoardSplit size={16} stroke={1.75} />}
@@ -2042,7 +2305,7 @@ index 9cbfd041..cdc3c5d7 100644
  
        {/* "Save as BVR3" was a permanently-disabled placeholder (export path
            still has a side-inversion bug). Dead chrome trains users to ignore
-@@ -709,6 +795,7 @@ export function Toolbar() {
+@@ -709,6 +798,7 @@ export function Toolbar() {
  
        <InfoBadge />
        {!isElectron() && !isLiteBuild() && <UpdateBadge update={update} />}
@@ -2304,7 +2567,7 @@ index 00000000..18220d5a
 +export function R2NetNamesBtn() { return <R2VisBtn k="showNetNames" title="Net names" txt="NET" />; }
 +export function R2PartNamesBtn() { return <R2VisBtn k="showPartLabels" title="Part names" txt="U1" />; }
 diff --git a/src/frontend/src/components/overlay/slots/SideSwitch.tsx b/src/frontend/src/components/overlay/slots/SideSwitch.tsx
-index f44d9cce..435f83d9 100644
+index f44d9cce..f169bddf 100644
 --- a/src/frontend/src/components/overlay/slots/SideSwitch.tsx
 +++ b/src/frontend/src/components/overlay/slots/SideSwitch.tsx
 @@ -4,7 +4,7 @@
@@ -2312,23 +2575,24 @@ index f44d9cce..435f83d9 100644
   * Moved down from the app toolbar in v0.39; behaviour identical.
   */
 -import { IconStackFront, IconStackBack } from '@tabler/icons-react';
-+import { IconStackFront, IconStackBack, IconFlipHorizontal } from '@tabler/icons-react';
++import { IconStackFront, IconStackBack, IconFlipHorizontal, IconGhost2, IconGhost2Filled } from '@tabler/icons-react';
  import { boardStore } from '../../../store/board-store';
  import { formatShortcut } from '../../../store/keyboard-shortcuts';
  import type { SlotCtx } from '../slot-ctx';
-@@ -13,8 +13,9 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
+@@ -13,8 +13,10 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
    const t = ctx.thisTab;
    // The store tracks the file's side='top' layer; on files whose primary
    // side is the bottom the labels swap so "Top" means what the user sees.
 -  const uiTop    = t.primarySide === 'bottom' ? t.showBottom : t.showTop;
 -  const uiBottom = t.primarySide === 'bottom' ? t.showTop    : t.showBottom;
 +  const bf = !!t.butterfly;
++  const gm = t.ghostMode ?? 'off';
 +  const uiTop    = !bf && (t.primarySide === 'bottom' ? t.showBottom : t.showTop);
 +  const uiBottom = !bf && (t.primarySide === 'bottom' ? t.showTop    : t.showBottom);
    const tip = `${formatShortcut('flipBoard')} flips · hold it to peek · Shift-click for both sides`;
    return (
      <div className="overlay-seg" role="group" aria-label="Board side" data-testid="side-switch">
-@@ -24,7 +25,7 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
+@@ -24,7 +26,7 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
          data-testid="side-top"
          aria-pressed={uiTop}
          title={`Top side · ${tip}`}
@@ -2337,7 +2601,7 @@ index f44d9cce..435f83d9 100644
        >
          <IconStackFront size={15} stroke={1.9} /><span className="overlay-seg-lbl">Top</span>
        </button>
-@@ -34,10 +35,21 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
+@@ -34,10 +36,37 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
          data-testid="side-bottom"
          aria-pressed={uiBottom}
          title={`Bottom side · ${tip}`}
@@ -2356,6 +2620,22 @@ index f44d9cce..435f83d9 100644
 +        onClick={() => boardStore.toggleButterfly()}
 +      >
 +        <IconFlipHorizontal size={15} stroke={1.9} /><span className="overlay-seg-lbl">Butterfly</span>
++      </button>
++      {/* 2R 30/10/2026 (Roger: «voltar a função ghost… botão ao lado do bottom, top, butterfly»): com uma linha
++          marcada, as peças do outro lado nessa linha aparecem apagadas (ghost); segundo clique: disco (as peças da
++          linha piscam nos dois lados); terceiro: desliga */}
++      <button
++        type="button"
++        className={`overlay-seg-btn${gm !== 'off' ? ' active' : ''}`}
++        data-testid="side-ghost"
++        aria-pressed={gm !== 'off'}
++        title={gm === 'off' ? 'Ghost desligado · clique: peças do outro lado na linha marcada aparecem apagadas'
++          : gm === 'ghosts' ? 'Ghost ligado · clique: disco (peças da linha piscam nos dois lados)'
++          : 'Disco ligado · clique: desliga'}
++        onClick={() => boardStore.cycleGhostMode()}
++      >
++        {gm === 'disco' ? <IconGhost2Filled size={15} stroke={1.9} /> : <IconGhost2 size={15} stroke={1.9} />}
++        <span className="overlay-seg-lbl">{gm === 'disco' ? 'Disco' : 'Ghost'}</span>
 +      </button>
      </div>
    );
@@ -2441,7 +2721,7 @@ index a70d80a2..d6003c73 100644
        if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
          if (pdfStore.matches.length > 0) {
 diff --git a/src/frontend/src/index.css b/src/frontend/src/index.css
-index 5498de41..c3c3a95a 100644
+index 5498de41..988651ba 100644
 --- a/src/frontend/src/index.css
 +++ b/src/frontend/src/index.css
 @@ -1142,7 +1142,7 @@ body {
@@ -2493,7 +2773,7 @@ index 5498de41..c3c3a95a 100644
    pointer-events: none;
    z-index: 5;
    box-sizing: border-box;
-@@ -10018,3 +10033,964 @@ body {
+@@ -10018,3 +10033,1007 @@ body {
  }
  .settings-fine-tune > summary:hover { color: var(--text-primary); }
  .settings-fine-tune[open] > summary { margin-bottom: 4px; }
@@ -3457,6 +3737,49 @@ index 5498de41..c3c3a95a 100644
 +  background: #000 !important;
 +  color: #fff !important;
 +  border-color: rgba(255, 255, 255, 0.85) !important;
++}
++
++/* 2R 30/10/2026 — busca de placa doadora (laranja do «Em teste») */
++.r2-doadora { display:flex; align-items:center; margin-right:8px; flex:none; }
++.r2-doadora-btn { display:flex; align-items:center; gap:6px; height:26px; padding:0 10px; border:1px solid #E0A040;
++  border-radius:7px; background:#000; color:#E0A040; font-size:10px; font-weight:800; letter-spacing:1.3px; cursor:pointer; white-space:nowrap; }
++.r2-doadora-btn:hover, .r2-doadora-btn.on { color:#fff; }
++.r2-doadora-rot { color:#E0A040; font-size:10px; font-weight:800; letter-spacing:1.4px; white-space:nowrap; }
++.r2-doadora-in { flex:1; min-width:0; height:30px; padding:0 10px; background:#000; border:1px solid #E0A040; border-radius:7px; outline:0; color:#fff; font-size:13px;
++  font-family: Menlo, Consolas, monospace; text-transform:uppercase; }
++.r2-doadora-in::placeholder { color:#6B7078; text-transform:none; font-family:inherit; }
++.r2-doadora-seg { display:flex; border:1px solid #3A3D44; border-radius:5px; overflow:hidden; }
++.r2-doadora-seg button { background:transparent; color:#C9CDD3; border:0; padding:2px 6px; font-size:9.5px;
++  font-weight:800; letter-spacing:.6px; cursor:pointer; }
++.r2-doadora-seg button + button { border-left:1px solid #3A3D44; }
++.r2-doadora-seg button.on { background:#E0A040; color:#000; }
++.r2-doadora-max { color:#6B7078; font-size:10px; white-space:nowrap; padding-right:4px; }
++.r2-doadora-pop { position:fixed; z-index:10050; background:#16171A; border:1px solid #3A3D44; border-radius:10px;
++  box-shadow:0 14px 40px rgba(0,0,0,.55); padding:4px 0 6px; max-height:70vh; overflow:auto; }
++.r2-doadora-head { color:#9AA0A8; font-size:12px; padding:8px 14px 6px; }
++.r2-doadora-head b { color:#fff; }
++.r2-doadora-row { display:grid; grid-template-columns: 110px 70px 1fr auto auto; align-items:center; gap:12px; width:100%;
++  text-align:left; background:transparent; border:0; border-top:1px solid #23262B; color:#EDEDED; padding:9px 14px;
++  cursor:pointer; font-size:13px; }
++.r2-doadora-row.sel { background:#000; outline:1px solid #E0A040; outline-offset:-1px; }
++.r2-dr-board { font-weight:800; font-family: Menlo, Consolas, monospace; }
++.r2-dr-model { color:#E0A040; font-weight:700; }
++.r2-dr-pos { color:#C9CDD3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
++.r2-dr-n { color:#8A9099; font-size:12px; white-space:nowrap; }
++.r2-dr-tag { font-size:10px; font-weight:800; letter-spacing:.8px; border:1px solid #6B7078; color:#C9CDD3;
++  border-radius:4px; padding:2px 6px; white-space:nowrap; }
++.r2-dr-tag.ok { border-color:#39C46A; color:#39C46A; }
++.r2-doadora-vazio { color:#9AA0A8; font-size:12.5px; padding:10px 14px; line-height:1.45; }
++.r2-doadora-pe { color:#6B7078; font-size:11.5px; padding:8px 14px 2px; border-top:1px solid #23262B; }
++.r2-doadora-topo { display:flex; align-items:center; gap:10px; padding:8px 14px 4px; }
++.r2-doadora-topo .r2-doadora-seg button { font-size:10.5px; padding:3px 10px; }
++
++/* 2R 30/10/2026 (Roger: «esse ícone do acervo, não gostei dele colorido… mantém no nosso padrão»): item ativo da
++   barra lateral igual à aba em foco do SDS — fundo preto, contorno laranja, ícone e texto brancos */
++.activity-rail-item.active,
++.activity-rail-item[aria-pressed="true"] {
++  color: #ffffff !important;
++  box-shadow: 0 0 0 1.5px #E0A040 !important;
 +}
 diff --git a/src/frontend/src/main.tsx b/src/frontend/src/main.tsx
 index 0a40c1e6..939e0be3 100644
@@ -6020,10 +6343,10 @@ index 00000000..b2b15976
 +}
 diff --git a/src/frontend/src/r2/guide-store.ts b/src/frontend/src/r2/guide-store.ts
 new file mode 100644
-index 00000000..1fd3fa5d
+index 00000000..35c557fd
 --- /dev/null
 +++ b/src/frontend/src/r2/guide-store.ts
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,684 @@
 +/**
 + * 2R Tools: Teleguiado — sequência de start indicada na placa (Roger, 10/10/2026):
 + * «deixar o boardripper com a função teleguiado… uma sequência de start e já
@@ -6214,9 +6537,24 @@ index 00000000..1fd3fa5d
 +  return { step, nets, missing, points: points.map(({ score: _s, ...r }) => r) };
 +}
 +
++/* 2R 29/10/2026 (Roger: «posso usar o estudo e o ripper ao mesmo tempo, sem fechar ou sair do ponto da análise, assim
++   posso abrir duas placas ao mesmo tempo e comparar o circuito»): o ponto a ponto fica PRESO à aba da placa em que foi
++   ligado. Abrir/olhar outra placa não muda o passo nem mexe na câmera dela; ao voltar para a aba do estudo, ele
++   recentraliza no ponto em que estava. */
++let gTab: number | null = null;
++function guideTab() {
++  const t = gTab != null ? boardStore.tabs.find(x => x.id === gTab && x.board) : undefined;
++  if (t) return t;
++  gTab = null;
++  const at = boardStore.activeTab;
++  if (on && active && at?.board && matchesBoard(active, at.fileName || '')) { gTab = boardStore.activeTabId; return at; }
++  return boardStore.activeTab?.board ? boardStore.activeTab : (active && on ? boardStore.tabs.find(x => x.board) ?? null : null);
++}
++function naAbaDoEstudo(): boolean { return gTab == null || boardStore.activeTabId === gTab; }
++
 +function current(): Resolved | null {
-+  // 2R: com o ponto a ponto ligado, vale a placa aberta mesmo que a aba ativa seja outra (PDF)
-+  const b = boardStore.activeTab?.board || (active && on ? (boardStore.tabs.find(t => t.board) || { board: null }).board : null);
++  // 2R: com o ponto a ponto ligado, vale a placa do estudo mesmo que a aba ativa seja outra (PDF ou outra placa)
++  const b = guideTab()?.board ?? null;
 +  if (!active || !b || !active.steps[pos]) return null;
 +  return resolve(b, active.steps[pos]);
 +}
@@ -6266,7 +6604,7 @@ index 00000000..1fd3fa5d
 +   anterior» — entre os pontos medíveis da net, vai para o mais perto do ponto do passo anterior; ponto fixado à mão vale */
 +function r2PtAtual(): { x: number; y: number; side?: string } | null {
 +  try {
-+    const c = current(), b = boardStore.activeTab?.board;
++    const c = current(), b = guideTab()?.board;
 +    const t = c && c.points[pointIdx % Math.max(1, c.points.length)];
 +    const p = t && b && b.parts[t.partIndex]?.pins[t.pinIndex];
 +    return p && b ? { x: p.position.x, y: p.position.y, side: b.parts[t!.partIndex].side } : null;
@@ -6274,16 +6612,32 @@ index 00000000..1fd3fa5d
 +}
 +function r2Perto(p: { x: number; y: number; side?: string } | null | undefined): number {
 +  try {
-+    if (!p || r2w.__r2PertoOff) return 0;
-+    const c = current(), b = boardStore.activeTab?.board;
++    if (r2w.__r2PertoOff) return 0;
++    const c = current(), b = guideTab()?.board;
 +    if (!c || !b || !c.points.length || c.points[0].fixed) return 0;
 +    let a = c.points.map((t, k) => ({ t, k })).filter(o => o.t.kind !== 'outro');
 +    if (!a.length) a = c.points.map((t, k) => ({ t, k }));
++    /* 2R 29/10/2026 (Roger: «desconsiderar quando o pad mais próximo estiver dentro de um BGA — SSD, CPU, T2, GPU,
++       PCH, PMU, SPMU, CI de charger etc.»): pino de CI grande (16 pinos ou mais) só entra se a net não tiver outro
++       ponto medível. Mudar o limite: window.__r2BgaPinos = N (0 desliga) */
++    const lim = Number((r2w as unknown as { __r2BgaPinos?: number }).__r2BgaPinos ?? 16);
++    if (lim > 0) {
++      const fora = a.filter(o => (b.parts[o.t.partIndex]?.pins.length ?? 0) < lim);
++      if (fora.length) a = fora;
++    }
++    if (!p) return a[0].k;
++    /* 2R 29/10/2026 (Roger: «ir para o ponto mais próximo e de preferência do mesmo lado da placa… entre dois pontos
++       próximos sendo um de cada lado, dar preferência para um outro ponto do mesmo lado»): ponto do OUTRO lado só
++       ganha se estiver 3× mais perto (distância ao quadrado × 9). Sem ponto anterior com lado, vale o lado que está
++       na tela. Desligar: window.__r2LadoPeso = 1 */
++    const lado = p.side ?? (() => { const t = guideTab(); return t && !t.butterfly && t.showTop !== t.showBottom ? (t.showTop ? 'top' : 'bottom') : undefined; })();
++    const k2 = Math.pow(Number((r2w as unknown as { __r2LadoPeso?: number }).__r2LadoPeso) || 3, 2);
 +    let m = 0, d = Infinity;
 +    for (const o of a) {
 +      const pt = b.parts[o.t.partIndex], q = pt?.pins[o.t.pinIndex];
 +      if (!q) continue;
-+      const e = (q.position.x - p.x) ** 2 + (q.position.y - p.y) ** 2 + (p.side != null && pt.side != null && pt.side !== p.side ? 1e-9 : 0);
++      const outro = lado != null && pt.side != null && (pt.side === 'top' || pt.side === 'bottom') && pt.side !== lado;
++      const e = ((q.position.x - p.x) ** 2 + (q.position.y - p.y) ** 2) * (outro ? k2 : 1);
 +      if (e < d) { d = e; m = o.k; }
 +    }
 +    return m;
@@ -6308,6 +6662,7 @@ index 00000000..1fd3fa5d
 +function show() {
 +  const r = current();
 +  if (!r) { emit(); return; }
++  if (!naAbaDoEstudo()) { emit(); return; }      // 2R 29/10: outra placa na frente — não mexe na câmera dela
 +  const tab = boardStore.activeTab;
 +  const pt = r.points[pointIdx % Math.max(1, r.points.length)];
 +  if (pt && tab?.board) {
@@ -6357,6 +6712,8 @@ index 00000000..1fd3fa5d
 +r2w.__2rBoardGet = () => boardStore;
 +export const guideStore = {
 +  subscribe(f: () => void) { subs.add(f); return () => { subs.delete(f); }; },
++  /** 2R 29/10: aba da placa do estudo (pode não ser a ativa) */
++  tab() { return guideTab(); },
 +  get rev() { return rev; },
 +  get list() { return list; },
 +  get active() { return active; },
@@ -6380,7 +6737,7 @@ index 00000000..1fd3fa5d
 +    return list.filter(r => matchesBoard(r, f));
 +  },
 +  open(id: string) { active = list.find(x => x.id === id) ?? null; pos = 0; pointIdx = 0; emit(); },
-+  start() { if (!active) return; on = true; applySavedZoom = true; try { localStorage.setItem(ON_KEY, '1'); } catch { /* */ } show(); },
++  start() { if (!active) return; gTab = boardStore.activeTab?.board ? boardStore.activeTabId : gTab; on = true; applySavedZoom = true; try { localStorage.setItem(ON_KEY, '1'); } catch { /* */ } if (pointIdx === 0) pointIdx = r2Perto(null); show(); },
 +  stop() {
 +    try { const v = r2w.__2rVP, z = v && Math.abs(v.scale.x); if (z && z > 0) localStorage.setItem('2r-seq-zoom', String(z)); } catch { /* */ }
 +    on = false;
@@ -6648,7 +7005,7 @@ index 00000000..1fd3fa5d
 +}
 +
 +function onKey(e: KeyboardEvent) {
-+  if (!on || !active) return;
++  if (!on || !active || !naAbaDoEstudo()) return;
 +  const t = e.target as HTMLElement | null;
 +  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
 +  if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -6665,6 +7022,14 @@ index 00000000..1fd3fa5d
 +  if (!IS_2R || !beta('teleguiado')) return;
 +  window.addEventListener('keydown', onKey, true);
 +  boardStore.subscribe(() => { void pullSeq(); });
++  // 2R 29/10: voltou para a aba do estudo → recentraliza no ponto em que estava
++  let ultAba: number | null = boardStore.activeTabId;
++  boardStore.subscribe(() => {
++    const a = boardStore.activeTabId;
++    if (a === ultAba) return;
++    ultAba = a;
++    if (on && active && gTab != null && a === gTab) setTimeout(() => { try { show(); } catch { /* */ } }, 80);
++  });
 +}
 diff --git a/src/frontend/src/r2/hand-flags.ts b/src/frontend/src/r2/hand-flags.ts
 new file mode 100644
@@ -6697,10 +7062,10 @@ index 00000000..91e64f7e
 +}
 diff --git a/src/frontend/src/r2/hand-geom.ts b/src/frontend/src/r2/hand-geom.ts
 new file mode 100644
-index 00000000..61693f17
+index 00000000..ea810705
 --- /dev/null
 +++ b/src/frontend/src/r2/hand-geom.ts
-@@ -0,0 +1,1908 @@
+@@ -0,0 +1,2001 @@
 +// @ts-nocheck
 +/* eslint-disable */
 +// 2R Tools — geometria dos componentes (pads físicos, contornos, DrMOS, shunt, capacitores, cards do diodo, cruz,
@@ -8608,7 +8973,100 @@ index 00000000..61693f17
 +  } catch (e) {}
 +}
 +
-+export { R2centro, R2viz, R2tam, R2lado, R2mira, R2raio, R2rEf, R2caixa, R2claro, R2drmosGiro, R2margem, R2pk, R2grande, R2uf, R2kf, R2cap4, R2gira, R2shunt, R2faixa, R2drmos, R2drmos2, R2pads, R2contorno, R2bob4, R2fpc };
++
++/*2R 29/10/2026 (prints do Roger, A2992 820-02918 — C9952/C9955/C9957/C9903: «vários problemas de layout… esses são corretos, se basear por aqui»): capacitor de polímero de 3 terminais (pinos 1 e 2 nas pontas, 3 no meio, todos em linha — reto ou a 45°). O corpo do arquivo ia do pino 1 ao 3 e o pad 2 ficava de fora. Agora: três pads redondos em linha, corpo em volta dos três (girado quando a peça está inclinada). window.__r2Cap3Off=true desliga*/ function R2cap3(b) {
++  if (!b || !b.parts || window.__r2Cap3Off === !0) return;
++  for (const P of b.parts) {
++    try {
++      if (!P || !P.pins || P.pins.length !== 3 || !/^C/i.test(P.name || "") || P.__r2cap3) continue;
++      if (P.pins.some((q) => !q || !q.position)) continue;
++      let best = null;
++      for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) {
++        const a = P.pins[i].position, c = P.pins[j].position, d = Math.hypot(a.x - c.x, a.y - c.y);
++        if (!best || d > best.d) best = { i, j, d };
++      }
++      if (!best || !(best.d > 0)) continue;
++      const E1 = P.pins[best.i].position, E2 = P.pins[best.j].position, M = P.pins[3 - best.i - best.j].position;
++      const ux = (E2.x - E1.x) / best.d, uy = (E2.y - E1.y) / best.d;
++      const t = (M.x - E1.x) * ux + (M.y - E1.y) * uy, off = Math.abs(-(M.x - E1.x) * uy + (M.y - E1.y) * ux);
++      if (!(t > best.d * 0.2 && t < best.d * 0.8) || off > best.d * 0.12) continue; /*só os 3 em linha, o do meio entre os outros*/
++      const gap = Math.min(t, best.d - t), D = gap * 0.94, r = D / 2;
++      for (const q of P.pins) {
++        const x = q.position.x, y = q.position.y;
++        q.padBounds = { minX: x - r, minY: y - r, maxX: x + r, maxY: y + r };
++        q.padShape = "round";
++        delete q.padWidth; delete q.padHeight; delete q.padAngleDeg; delete q.padPolygon; delete q.padCornerRadius;
++      }
++      const W = D * 1.08, L = best.d + D * 1.08, cx = (E1.x + E2.x) / 2, cy = (E1.y + E2.y) / 2;
++      if (Math.abs(ux) > 0.996 || Math.abs(uy) > 0.996) {
++        const hz = Math.abs(ux) >= Math.abs(uy);
++        P.__r2corpo = hz ? { x: cx - L / 2, y: cy - W / 2, w: L, h: W } : { x: cx - W / 2, y: cy - L / 2, w: W, h: L };
++      } else {
++        const vx = -uy, vy = ux, hl = L / 2, hw = W / 2;
++        P.__r2poly = [
++          [cx - ux * hl - vx * hw, cy - uy * hl - vy * hw], [cx + ux * hl - vx * hw, cy + uy * hl - vy * hw],
++          [cx + ux * hl + vx * hw, cy + uy * hl + vy * hw], [cx - ux * hl + vx * hw, cy - uy * hl + vy * hw],
++        ];
++        P.__r2gira = 1;
++      }
++      P.__r2shunt = 1; P.__r2pads = 1; P.__r2cap3 = 1;
++    } catch (e) {}
++  }
++}
++/*2R 29/10/2026 (prints do Roger, JE500/JE510 da 820-02918: no visualizador de referência o conector aparece girado; aqui ficava um retângulo reto): conector (J…) montado inclinado — o ângulo vem da fileira de contatos (pino vizinho mais próximo); entre 10° e 80°, o corpo vira o retângulo girado que envolve todos os pads (com 0,15 mm de folga). window.__r2GiraJOff=true desliga*/ function R2giraJ(b) {
++  if (!b || !b.parts || window.__r2GiraJOff === !0) return;
++  for (const P of b.parts) {
++    try {
++      if (!P || !P.pins || P.pins.length < 4 || P.pins.length > 80 || !/^J/i.test(P.name || "") || P.__r2poly) continue;
++      const pts = P.pins.filter((q) => q && q.position).map((q) => q.position);
++      if (pts.length < 4) continue;
++      const H = new Map();
++      for (let i = 0; i < pts.length; i++) {
++        let m = 1 / 0, dx = 0, dy = 0;
++        for (let j = 0; j < pts.length; j++) {
++          if (i === j) continue;
++          const x = pts[j].x - pts[i].x, y = pts[j].y - pts[i].y, d2 = x * x + y * y;
++          d2 > 1e-9 && d2 < m && ((m = d2), (dx = x), (dy = y));
++        }
++        if (m < 1 / 0) {
++          let g = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
++          g = ((g % 90) + 90) % 90;
++          H.set(g, (H.get(g) || 0) + 1);
++        }
++      }
++      let gd = 0, gn = 0;
++      for (const [g, n] of H) {
++        let n2 = 0; /*±3°: com poucos pinos as coordenadas arredondadas espalham o ângulo (JE500: 35°, 37°, 39°)*/
++        for (let k = -3; k <= 3; k++) n2 += H.get((g + k + 90) % 90) || 0;
++        n2 > gn && ((gn = n2), (gd = g));
++      }
++      if (gd < 10 || gd > 80 || gn < pts.length * 0.4) continue;
++      /*2R 29/10/2026 (referência do Roger, JE500: o corpo acompanha a fileira de contatos — a fileira fica paralela a um lado do retângulo; não arredondar para 45°)*/
++      const tt = (gd * Math.PI) / 180, c = Math.cos(tt), sn = Math.sin(tt);
++      let a0 = 1 / 0, a1 = -1 / 0, b0 = 1 / 0, b1 = -1 / 0;
++      const add = (x, y) => {
++        const u = x * c + y * sn, v = -x * sn + y * c;
++        a0 = Math.min(a0, u); a1 = Math.max(a1, u); b0 = Math.min(b0, v); b1 = Math.max(b1, v);
++      };
++      for (const q of P.pins) {
++        if (!q || !q.position) continue;
++        const B = q.padBounds;
++        if (B) { add(B.minX, B.minY); add(B.maxX, B.minY); add(B.maxX, B.maxY); add(B.minX, B.maxY); }
++        else add(q.position.x, q.position.y);
++      }
++      if (!isFinite(a0)) continue;
++      const g = 0.15 * 39.37;
++      a0 -= g; a1 += g; b0 -= g; b1 += g;
++      const pt = (u, v) => [u * c - v * sn, u * sn + v * c];
++      P.__r2poly = [pt(a0, b0), pt(a1, b0), pt(a1, b1), pt(a0, b1)];
++      P.__r2gira = 1;
++      P.__r2giraJ = gd;
++      delete P.__r2corpo;
++    } catch (e) {}
++  }
++}
++
++export { R2centro, R2viz, R2tam, R2lado, R2mira, R2raio, R2rEf, R2caixa, R2claro, R2drmosGiro, R2margem, R2pk, R2grande, R2uf, R2kf, R2cap4, R2gira, R2shunt, R2faixa, R2drmos, R2drmos2, R2pads, R2contorno, R2bob4, R2fpc, R2cap3, R2giraJ };
 diff --git a/src/frontend/src/r2/hand-globals.tsx b/src/frontend/src/r2/hand-globals.tsx
 new file mode 100644
 index 00000000..de3c467d
@@ -9882,7 +10340,7 @@ index 00000000..7a21039a
 +  if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
 +}
 diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
-index 188a12c8..93c72f4e 100644
+index 188a12c8..c6442842 100644
 --- a/src/frontend/src/renderer/BoardRenderer.ts
 +++ b/src/frontend/src/renderer/BoardRenderer.ts
 @@ -71,8 +71,11 @@ import { log } from '../store/log-store';
@@ -9997,7 +10455,44 @@ index 188a12c8..93c72f4e 100644
          if (animMoved || this.programmaticMove) {
            this.programmaticMove = false;
            if (this.viewSettleTimer) { clearTimeout(this.viewSettleTimer); this.viewSettleTimer = null; }
-@@ -1650,6 +1721,9 @@ export class BoardRenderer {
+@@ -1607,9 +1678,36 @@ export class BoardRenderer {
+     };
+     this.boundContextRestored = () => {
+       log.render.log(`WebGL context restored event tab=${this.tabId} — deferring recovery to resume()`);
++      this.r2RecoverIfVisible();
+     };
+     canvas.addEventListener('webglcontextlost', this.boundContextLost);
+     canvas.addEventListener('webglcontextrestored', this.boundContextRestored);
++    /* 2R 29/10/2026 (Roger: «quando fui preencher a ficha de reparo e voltei para o ripper, tava em nada... só a tela de
++       fundo»): no SDS a página inteira some quando se troca de ferramenta — o contexto WebGL pode ser perdido enquanto ela
++       está escondida, mas o painel do Dockview nunca deixou de estar «visível», então ninguém chamava resume() e a placa
++       ficava em branco. Ao a página voltar a aparecer (ou ganhar foco), recupera. */
++    if (!this.r2BoundVis) {
++      this.r2BoundVis = () => this.r2RecoverIfVisible();
++      document.addEventListener('visibilitychange', this.r2BoundVis);
++      window.addEventListener('focus', this.r2BoundVis);
++      window.addEventListener('pageshow', this.r2BoundVis);
++    }
++  }
++
++  private r2BoundVis: (() => void) | null = null;
++  private r2RecoverIfVisible() {
++    try {
++      if (this.destroyed || this.panelPaused || document.visibilityState !== 'visible') return;
++      if (this.contextLost && !this.reinitializing) {
++        log.render.log(`page visible again with a lost context tab=${this.tabId} — recovering`);
++        setTimeout(() => { if (!this.destroyed && !this.panelPaused && this.contextLost) this.resume(); }, 60);
++      } else if (this.initialized && this.app?.ticker && !this.app.ticker.started) {
++        this.app.ticker.start();
++        this.needsRender = true;
++      } else {
++        this.needsRender = true;
++      }
++    } catch { /* */ }
+   }
+ 
+   /** Remove context loss handlers from the current canvas. */
+@@ -1650,6 +1748,9 @@ export class BoardRenderer {
      try {
        await this.app.init({
          background: COLORS.background,
@@ -10007,7 +10502,7 @@ index 188a12c8..93c72f4e 100644
          width: this.containerEl.clientWidth || 1,
          height: this.containerEl.clientHeight || 1,
          antialias: boardAntialias(renderSettingsStore.settings.touchPerformanceMode, renderSettingsStore.settings.boardAntialiasing),
-@@ -1827,6 +1901,7 @@ export class BoardRenderer {
+@@ -1827,6 +1928,7 @@ export class BoardRenderer {
      // Sync with current store state (applies layer visibility, selection, etc.)
      this.onBoardUpdate();
  
@@ -10015,7 +10510,7 @@ index 188a12c8..93c72f4e 100644
      log.render.log(`reinitApp COMPLETE tab=${this.tabId} board=${savedBoard ? savedBoard.format : 'null'} tickerStarted=${this.app.ticker.started} scene=${this.activeScene ? 'yes' : 'null'}`);
    }
  
-@@ -1835,6 +1910,9 @@ export class BoardRenderer {
+@@ -1835,6 +1937,9 @@ export class BoardRenderer {
      try {
      await this.app.init({
        background: COLORS.background,
@@ -10025,7 +10520,7 @@ index 188a12c8..93c72f4e 100644
        width: this.containerEl.clientWidth,
        height: this.containerEl.clientHeight,
        antialias: boardAntialias(renderSettingsStore.settings.touchPerformanceMode, renderSettingsStore.settings.boardAntialiasing),
-@@ -1854,6 +1932,8 @@ export class BoardRenderer {
+@@ -1854,6 +1959,8 @@ export class BoardRenderer {
        return;
      }
      if (this.tabId !== null) { registerRenderer(this.tabId, this.app); navHistoryStore.registerBoardCamera(this.tabId, this.navCamera); }
@@ -10034,7 +10529,7 @@ index 188a12c8..93c72f4e 100644
      this.containerEl.appendChild(this.app.canvas as HTMLCanvasElement);
      this.initialized = true;
  
-@@ -2162,6 +2242,21 @@ export class BoardRenderer {
+@@ -2162,6 +2269,30 @@ export class BoardRenderer {
  
      this.boundContextMenu = (e: MouseEvent) => {
        e.preventDefault();
@@ -10049,6 +10544,15 @@ index 188a12c8..93c72f4e 100644
 +          if (P) {
 +            try { boardStore.selectPart(H.partIndex); } catch { /* */ }
 +            this.triggerFollowPdf(P, true);
++            /* 2R 29/10/2026 (Roger: «ao clicar com o botão direito em cima de um pad, copiar o nome da linha ou alguma
++               outra informação»): além de mostrar no PDF, abre ao lado do cursor um cartãozinho para copiar a net, o
++               pino, a peça (desenhado pelo index.html: window.__r2CopiaChip) */
++            try {
++              const pin = H.pinIndex != null && H.pinIndex >= 0 ? P.pins[H.pinIndex] : undefined;
++              const chip = (r2w as unknown as { __r2CopiaChip?: (o: Record<string, string>, x: number, y: number) => void }).__r2CopiaChip;
++              if (chip) chip({ peca: P.name, pino: pin ? String(pin.number || pin.name || '') : '', net: pin ? String(pin.net || '') : '',
++                               lado: String(P.side || '') }, e.clientX, e.clientY);
++            } catch { /* */ }
 +            return;
 +          }
 +        }
@@ -10056,7 +10560,7 @@ index 188a12c8..93c72f4e 100644
        this.handleRightClick(e);
      };
      this.containerEl.addEventListener('contextmenu', this.boundContextMenu);
-@@ -2241,7 +2336,8 @@ export class BoardRenderer {
+@@ -2241,7 +2372,8 @@ export class BoardRenderer {
      this.tooltipWorklistNetSpan = document.createElement('span');
      this.tooltipWorklistNetSpan.className = 'pnt-worklist-net';
      this.tooltipWorklistNetSpan.style.display = 'none';
@@ -10066,7 +10570,7 @@ index 188a12c8..93c72f4e 100644
      this.containerEl.appendChild(this.tooltipEl);
      this.tooltipCanvas = this.app.renderer.canvas as HTMLCanvasElement;
      // Coalesce to one handleHover() per animation frame — pointermove can fire
-@@ -2454,6 +2550,9 @@ export class BoardRenderer {
+@@ -2454,6 +2586,9 @@ export class BoardRenderer {
        if (this.app && !this.contextLost && !this.reinitializing) this.app.render();
      });
      this.unsubscribeTheme = themeStore.subscribe(() => this.onThemeUpdate());
@@ -10076,7 +10580,7 @@ index 188a12c8..93c72f4e 100644
      this.unsubscribeObd = obdStore.subscribe(() => this.onObdUpdate());
      this.unsubscribeSelectionSet = selectionSetStore.subscribe(() => {
        this.redrawMultiHighlight();
-@@ -2479,6 +2578,9 @@ export class BoardRenderer {
+@@ -2479,6 +2614,9 @@ export class BoardRenderer {
          this.panView(payload as PanDirection);
        } else if (cmd === 'zoom') {
          this.zoomKeyboard(payload as ZoomDirection);
@@ -10086,7 +10590,16 @@ index 188a12c8..93c72f4e 100644
        }
      });
  
-@@ -3110,6 +3212,21 @@ export class BoardRenderer {
+@@ -2924,7 +3062,7 @@ export class BoardRenderer {
+         // zoom-invariant, so forcing netLinesDirty here just rebuilt identical
+         // segments. Genuine changes set netLinesDirty at their own sites.
+         this.renderNetLines();
+-        if (this.crossSideGhostParts.size > 0) this.renderCrossSideGhosts();
++        if (this.crossSideGhostParts.size > 0 || boardStore.showGhosts) this.renderCrossSideGhosts();
+       }
+       this.needsRender = true;
+     }, 32);
+@@ -3110,6 +3248,21 @@ export class BoardRenderer {
      scene.bottomOutlineLayer.visible = showComponents && showOutlines;
      scene.topLabelLayer.visible      = showComponents && showLabels;
      scene.bottomLabelLayer.visible   = showComponents && showLabels;
@@ -10108,7 +10621,16 @@ index 188a12c8..93c72f4e 100644
    }
  
    // --- Flip management ---
-@@ -4084,8 +4201,12 @@ export class BoardRenderer {
+@@ -3932,7 +4085,7 @@ export class BoardRenderer {
+         if (rotated || flipped || mirrored) {
+           this.netLinesDirty = true;
+           this.renderNetLines();
+-          if (this.crossSideGhostParts.size > 0) this.renderCrossSideGhosts();
++          if (this.crossSideGhostParts.size > 0 || boardStore.showGhosts) this.renderCrossSideGhosts();
+         }
+ 
+         // A 0/180 ↔ 90/270 rotation transposes board vs screen axes, so the
+@@ -4084,8 +4237,12 @@ export class BoardRenderer {
          // honouring 'keep'/'auto' would centre it without unzooming and leave
          // most pins off-screen. Force a fit (snap) for nets; parts still obey
          // the user's navZoomMode.
@@ -10123,7 +10645,7 @@ index 188a12c8..93c72f4e 100644
          // Preview navigation (net tree, single click) deliberately leaves the
          // selection alone, so the blink would draw attention to the previous
          // subject instead of the part we just flew to.
-@@ -4319,7 +4440,7 @@ export class BoardRenderer {
+@@ -4319,7 +4476,7 @@ export class BoardRenderer {
      bounds: { minX: number; minY: number; maxX: number; maxY: number },
      root?: Container,
      viewFraction = 0.25,
@@ -10132,7 +10654,7 @@ index 188a12c8..93c72f4e 100644
    ) {
      const bw = bounds.maxX - bounds.minX;
      const bh = bounds.maxY - bounds.minY;
-@@ -4340,7 +4461,9 @@ export class BoardRenderer {
+@@ -4340,7 +4497,9 @@ export class BoardRenderer {
  
      const mode = options.zoomMode ?? 'always';
      const currentMag = Math.abs(this.viewport.scale.x);
@@ -10143,7 +10665,7 @@ index 188a12c8..93c72f4e 100644
        // Never change zoom — just pan to the part's center.
        targetMag = currentMag;
      } else if (mode === 'auto' && currentMag > 0) {
-@@ -4468,6 +4591,13 @@ export class BoardRenderer {
+@@ -4468,6 +4627,13 @@ export class BoardRenderer {
        nets.add(pin.net);
        if (nets.size >= 4) break; // limit to 4 distinctive nets
      }
@@ -10157,7 +10679,7 @@ index 188a12c8..93c72f4e 100644
  
      // Pin names as extra disambiguating context (printed on the symbol body).
      // Keep only distinctive alphanumeric ball names (e.g. "A1"); drop purely
-@@ -4544,6 +4674,8 @@ export class BoardRenderer {
+@@ -4544,6 +4710,8 @@ export class BoardRenderer {
    /** Schedule a debounced follow-PDF lookup after viewport movement settles. */
    private scheduleFollowDebounce(): void {
      if (!boardStore.followPdf) return;
@@ -10166,7 +10688,7 @@ index 188a12c8..93c72f4e 100644
      if (this.followDebounceTimer) clearTimeout(this.followDebounceTimer);
      this.followDebounceTimer = setTimeout(() => {
        this.followDebounceTimer = null;
-@@ -4590,7 +4722,34 @@ export class BoardRenderer {
+@@ -4590,7 +4758,34 @@ export class BoardRenderer {
          trackpadPinch: true,
          wheelZoom: !s.twoFingerPan,  // disable scroll-to-zoom in two-finger-pan mode
        })
@@ -10202,7 +10724,7 @@ index 188a12c8..93c72f4e 100644
      if (!s.disableInertia) {
        this.viewport.decelerate({ friction: 0.95 });
      }
-@@ -4652,6 +4811,39 @@ export class BoardRenderer {
+@@ -4652,6 +4847,39 @@ export class BoardRenderer {
        // the smooth wheel zoom (2026-07-19) is every zoom-bound and modifier
        // wheel: the board took the zoom and drew nothing (regression of #6).
        this.boundWheelWake?.(e);
@@ -10242,7 +10764,7 @@ index 188a12c8..93c72f4e 100644
        if (e.ctrlKey) return;
  
        const s = renderSettingsStore.settings;
-@@ -4660,7 +4852,8 @@ export class BoardRenderer {
+@@ -4660,7 +4888,8 @@ export class BoardRenderer {
          action = s.wheelMetaAction;
        } else if (e.shiftKey) {
          action = s.wheelShiftAction;
@@ -10252,7 +10774,7 @@ index 188a12c8..93c72f4e 100644
          // Safety net: a classic mouse wheel in pan mode would pan jerkily —
          // route it to the mouse-centred zoom path instead.
          action = 'zoom';
-@@ -4674,7 +4867,7 @@ export class BoardRenderer {
+@@ -4674,7 +4903,7 @@ export class BoardRenderer {
        }
  
        if (action === 'zoom') {
@@ -10261,7 +10783,7 @@ index 188a12c8..93c72f4e 100644
        } else {
          this.viewport.x -= e.deltaX;
          this.viewport.y -= e.deltaY;
-@@ -4696,8 +4889,27 @@ export class BoardRenderer {
+@@ -4696,8 +4925,27 @@ export class BoardRenderer {
     *  not route through a delta, because that is exactly the accumulation the
     *  plugin's formula got wrong. Screen coordinates are container CSS px, the
     *  same space `viewport.toWorld` works in here. */
@@ -10290,7 +10812,7 @@ index 188a12c8..93c72f4e 100644
      const before = this.viewport.toWorld(screenX, screenY);
      this.viewport.scale.set(s, s);
      const after = this.viewport.toWorld(screenX, screenY);
-@@ -4932,11 +5144,12 @@ export class BoardRenderer {
+@@ -4932,11 +5180,12 @@ export class BoardRenderer {
     *  pointer 1:1, not lag behind an animated approach. */
    private zoomAtScreen(screenX: number, screenY: number, rawDelta: number, smooth = false, divisor = 500): void {
      const factor = Math.pow(2, (1 + 0.3) * (-rawDelta / divisor));
@@ -10304,7 +10826,7 @@ index 188a12c8..93c72f4e 100644
          anchorScreenX: screenX, anchorScreenY: screenY,
          anchorWorldX: world.x, anchorWorldY: world.y,
        };
-@@ -4945,10 +5158,7 @@ export class BoardRenderer {
+@@ -4945,10 +5194,7 @@ export class BoardRenderer {
        return;
      }
      const before = this.viewport.toWorld(screenX, screenY);
@@ -10316,7 +10838,7 @@ index 188a12c8..93c72f4e 100644
      const after = this.viewport.toWorld(screenX, screenY);
      this.viewport.x += (after.x - before.x) * this.viewport.scale.x;
      this.viewport.y += (after.y - before.y) * this.viewport.scale.y;
-@@ -5205,10 +5415,30 @@ export class BoardRenderer {
+@@ -5205,10 +5451,30 @@ export class BoardRenderer {
      return hexToInt(themeStore.activeTheme().board.dimColor ?? '#000000');
    }
  
@@ -10348,7 +10870,7 @@ index 188a12c8..93c72f4e 100644
      }
      // A theme change alters BOARD_COLORS (outline / selection / pin+net+part
      // label colours, board fill) even when NO render-setting changed — and the
-@@ -5537,13 +5767,17 @@ export class BoardRenderer {
+@@ -5537,13 +5803,17 @@ export class BoardRenderer {
      // always been drawn regardless — the label-raise below is what checks
      // visibility. Keeping that parity also keeps the selection findable when
      // a search result sits on the other side.
@@ -10368,7 +10890,7 @@ index 188a12c8..93c72f4e 100644
      // Primary (clicked) part: bold WHITE accent + stronger fill so it is
      // unmistakably THE selection amid muted net-members (#23). White stays
      // distinct from the yellow members, the worklist mark colours
-@@ -5554,15 +5788,20 @@ export class BoardRenderer {
+@@ -5554,15 +5824,20 @@ export class BoardRenderer {
      const PRIMARY_SEL = hexToInt(tb.selectedPart ?? '#ffffff');
      const blinkRed = this.selectionBlinkPhase > 0 && this.selectionBlinkPhase % 2 === 1;
      const selColor = blinkRed ? 0xcc2222 : PRIMARY_SEL;
@@ -10398,7 +10920,7 @@ index 188a12c8..93c72f4e 100644
    }
  
    private renderSelection() {
-@@ -5748,7 +5987,7 @@ export class BoardRenderer {
+@@ -5748,7 +6023,7 @@ export class BoardRenderer {
      const activeNets: Array<{ name: string; glowColor: number }> = [];
      const activeNetNames = new Set<string>();
      if (primaryNet) {
@@ -10407,7 +10929,7 @@ index 188a12c8..93c72f4e 100644
        activeNetNames.add(primaryNet);
        if (boardStore.netLineMode === 'chain-adjacent' && sel.highlightedNet) {
          for (const adj of sel.adjacentNets) {
-@@ -5963,7 +6202,10 @@ export class BoardRenderer {
+@@ -5963,7 +6238,10 @@ export class BoardRenderer {
            const isBotGfx = gfx === this.butterflySelectionGfx;
  
            const isPin1 = ref.pinIndex === 0 && part.pins.length > 2;
@@ -10419,7 +10941,7 @@ index 188a12c8..93c72f4e 100644
  
            // Affected names for label re-clone.
            if (part.side === 'bottom') affectedBotNames.add(part.name);
-@@ -5973,7 +6215,8 @@ export class BoardRenderer {
+@@ -5973,7 +6251,8 @@ export class BoardRenderer {
            const storedPads = part.pins.length === 2 ? this.activeScene?.twoPinPadPolys.get(ref.partIndex) : null;
            const pb = pin.padBounds;
            const pushDim = (fn: () => void) => {
@@ -10429,7 +10951,7 @@ index 188a12c8..93c72f4e 100644
              const map = isBotGfx ? botByColor : topByColor;
              let arr = map.get(pinColor);
              if (!arr) { arr = []; map.set(pinColor, arr); }
-@@ -6608,7 +6851,12 @@ export class BoardRenderer {
+@@ -6608,7 +6887,12 @@ export class BoardRenderer {
    }
  
    /** Recompute cached net line segments (start/end points + color) when selection or viewport changes */
@@ -10442,7 +10964,7 @@ index 188a12c8..93c72f4e 100644
      this.netLineSegments = [];
      this.netLineSegmentsByColor.clear();
      this.netLineFadeDist = 0;
-@@ -6714,8 +6962,8 @@ export class BoardRenderer {
+@@ -6714,8 +6998,8 @@ export class BoardRenderer {
          }
  
          if (bestPin) {
@@ -10453,7 +10975,7 @@ index 188a12c8..93c72f4e 100644
          }
          targetCount++;
        }
-@@ -6723,47 +6971,96 @@ export class BoardRenderer {
+@@ -6723,47 +7007,96 @@ export class BoardRenderer {
        const vpScale = Math.abs(this.viewport.scale.x);
        this.netLineFadeDist = Math.max(this.netLineFadeDist, targetCount > 8 ? 60 / vpScale : 0);
      } else {
@@ -10588,7 +11110,7 @@ index 188a12c8..93c72f4e 100644
        }
      }
    }
-@@ -6781,7 +7078,8 @@ export class BoardRenderer {
+@@ -6781,7 +7114,8 @@ export class BoardRenderer {
  
      const s = renderSettingsStore.settings;
      const vpScale = Math.abs(this.viewport.scale.x);
@@ -10598,7 +11120,7 @@ index 188a12c8..93c72f4e 100644
  
      const pulseT = s.netLinePulse ? (Math.sin(this.netLinePulsePhase * Math.PI * 2) + 1) / 2 : 0;
      const pulseColor = 0xcc2222;
-@@ -6797,7 +7095,7 @@ export class BoardRenderer {
+@@ -6797,7 +7131,7 @@ export class BoardRenderer {
      // the pulse animates only the child's alpha. The per-frame cost drops
      // from full path re-issue to one alpha write.
      if (!useFade && !s.netLineDashed) {
@@ -10607,7 +11129,7 @@ index 188a12c8..93c72f4e 100644
        if (sig !== this.netLineBakeSig) {
          this.netLineBakeSig = sig;
          if (!this.netLinesPulseGfx || this.netLinesPulseGfx.destroyed) {
-@@ -6817,6 +7115,14 @@ export class BoardRenderer {
+@@ -6817,6 +7151,14 @@ export class BoardRenderer {
          this.netLinesGfx.clear();       // clears geometry only; children survive
          this.netLinesPulseGfx.clear();
          for (const [baseColor, segs] of this.netLineSegmentsByColor) {
@@ -10622,19 +11144,69 @@ index 188a12c8..93c72f4e 100644
            for (const { start, end } of segs) {
              this.netLinesGfx.moveTo(start.x, start.y);
              this.netLinesGfx.lineTo(end.x, end.y);
-@@ -6870,6 +7176,11 @@ export class BoardRenderer {
+@@ -6870,6 +7212,14 @@ export class BoardRenderer {
     *  animates `alpha = ghostAlpha`; the outline layer bakes at 1 and animates
     *  `alpha = outlineAlpha`. Two layers because one Graphics has one alpha. */
    private renderCrossSideGhosts() {
-+    // 2R 18/10/2026: sem fantasmas do outro lado da placa
++    // 2R 18/10/2026: sem os fantasmas originais (só da linha marcada, piscando em azul).
++    // 2R 30/10/2026 (Roger: «ghost mantém na cor vermelha, todos os componentes do outro lado da placa aparecem em
++    // transparência com a borda em vermelho neon»): com o botão Ghost ligado, TODOS os componentes do lado escondido
++    // aparecem transparentes, contorno vermelho neon, parados (sem piscar).
 +    if (R2_SEM_FANTASMAS) {
-+      try { this.crossSideGhostGfx.clear(); this.crossSideGhostOutlineGfx.clear(); } catch { /* */ }
++      this.r2GhostOutroLado();
 +      return;
 +    }
      if (this.crossSideGhostParts.size === 0 || !this.board) {
        if (this.crossSideGhostBakeSig !== '') {
          this.crossSideGhostGfx.clear();
-@@ -7566,7 +7877,9 @@ export class BoardRenderer {
+@@ -6891,6 +7241,46 @@ export class BoardRenderer {
+     this.needsRender = true;
+   }
+ 
++  private r2GhostOutroLado() {
++    const on = !!this.board && boardStore.ghostMode !== 'off' && !boardStore.butterfly;
++    if (!on) {
++      if (this.crossSideGhostBakeSig !== '') {
++        try { this.crossSideGhostGfx.clear(); this.crossSideGhostOutlineGfx.clear(); } catch { /* */ }
++        this.crossSideGhostBakeSig = '';
++        this.needsRender = true;
++      }
++      return;
++    }
++    const s = renderSettingsStore.settings;
++    const b = this.board!;
++    const sig = `r2|${b.parts.length}|${boardStore.showTop}|${boardStore.showBottom}|${s.selectionWidth}|${s.pinSizeScale}`
++      + `|${this.activeScene ? 1 : 0}|${b.parts[0]?.name ?? ''}`;
++    if (sig === this.crossSideGhostBakeSig) return;
++    const fill = this.crossSideGhostGfx;
++    const outline = this.crossSideGhostOutlineGfx;
++    fill.clear();
++    outline.clear();
++    const NEON = 0xff1a3c;
++    const w = Math.max(1, s.selectionWidth * 0.8);
++    for (let i = 0; i < b.parts.length; i++) {
++      const part = b.parts[i];
++      if (!part || part.hidden || this.isPartVisible(part) || this.isTypeHidden(part.name)) continue;
++      drawPartOutline(fill, part, s, 0);
++      fill.fill({ color: NEON, alpha: 0.07 });
++      drawPartOutline(outline, part, s, 0);
++      outline.stroke({ width: w, color: NEON, alpha: 0.95 });
++      for (const pin of part.pins) {
++        const clamp = this.activeScene?.pinRadiusClamp.get(i) ?? Infinity;
++        drawPinShape(fill, pin, Math.min(computePinRadius(s, pin.radius), clamp));
++      }
++      if (part.pins.length > 0) fill.fill({ color: NEON, alpha: 0.18 });
++    }
++    fill.alpha = 1;
++    outline.alpha = 1;
++    this.crossSideGhostBakeSig = sig;
++    this.needsRender = true;
++  }
++
+   private bakeCrossSideGhosts(sig: string) {
+     const fill = this.crossSideGhostGfx;
+     const outline = this.crossSideGhostOutlineGfx;
+@@ -7566,7 +7956,9 @@ export class BoardRenderer {
        this.tooltipNetSpan.style.display = hasNet ? '' : 'none';
      }
      if (this.tooltipDetailSpan) {
@@ -10645,7 +11217,7 @@ index 188a12c8..93c72f4e 100644
      }
      // Cross-board compare line. Without it the board highlight only says
      // "this pin is different" and leaves you to go and find what it differs
-@@ -8464,8 +8777,16 @@ export class BoardRenderer {
+@@ -8464,8 +8856,16 @@ export class BoardRenderer {
  
    private zoomKeyboard(direction: ZoomDirection) {
      if (!this.viewport) return;
@@ -10664,7 +11236,20 @@ index 188a12c8..93c72f4e 100644
      const { keyboardZoomDelta } = renderSettingsStore.settings;
      const rawDelta = direction === 'in' ? -keyboardZoomDelta : keyboardZoomDelta;
      this.zoomAtScreen(cx, cy, rawDelta, true);
-@@ -8499,6 +8820,7 @@ export class BoardRenderer {
+@@ -8477,6 +8877,12 @@ export class BoardRenderer {
+   }
+ 
+   destroy() {
++    if (this.r2BoundVis) {
++      document.removeEventListener('visibilitychange', this.r2BoundVis);
++      window.removeEventListener('focus', this.r2BoundVis);
++      window.removeEventListener('pageshow', this.r2BoundVis);
++      this.r2BoundVis = null;
++    }
+     this.destroyed = true;
+     // destroy() is the full-teardown path (tab closed) and does NOT route
+     // through teardownForReinit() — unregister here too, or a closed tab's
+@@ -8499,6 +8905,7 @@ export class BoardRenderer {
      this.unsubscribeSettings?.();
      this.unsubscribeResizeMode?.();
      this.unsubscribeTheme?.();
@@ -10673,7 +11258,7 @@ index 188a12c8..93c72f4e 100644
      this.unsubscribeViewCommands?.();
      this.unsubscribeSelectionSet?.();
 diff --git a/src/frontend/src/renderer/board-scene.ts b/src/frontend/src/renderer/board-scene.ts
-index 426c6977..692e49d6 100644
+index 426c6977..145cadfd 100644
 --- a/src/frontend/src/renderer/board-scene.ts
 +++ b/src/frontend/src/renderer/board-scene.ts
 @@ -33,6 +33,7 @@ import {
@@ -10689,7 +11274,7 @@ index 426c6977..692e49d6 100644
  import { defaultLayerColor } from '../store/layer-store';
  import { themeStore, hexToInt } from '../store/themes';
 +import { r2PadsColoridos, r2Mesa, r2XwOculto } from '../r2/hand-flags';
-+import { R2centro, R2viz, R2caixa, R2claro, R2pk, R2grande, R2kf, R2cap4, R2gira, R2shunt, R2pads, R2contorno, R2bob4 } from '../r2/hand-geom';
++import { R2centro, R2viz, R2caixa, R2claro, R2pk, R2grande, R2kf, R2cap4, R2gira, R2shunt, R2pads, R2contorno, R2bob4, R2cap3, R2giraJ } from '../r2/hand-geom';
 +/* eslint-disable @typescript-eslint/no-explicit-any */
 +const r2win = window as any;
  
@@ -10814,7 +11399,7 @@ index 426c6977..692e49d6 100644
    // is what the user sees as a horizontal row — and that's the run that needs
    // the label stagger.
 +  // 2R 20/10 a 27/10/2026: contorno externo, shunt/cristal/conector, capacitor de 4 terminais, pads físicos, CI girado
-+  R2contorno(board); R2shunt(board); R2cap4(board); R2bob4(board); R2pads(board); R2gira(board);
++  R2contorno(board); R2cap3(board); R2shunt(board); R2cap4(board); R2bob4(board); R2pads(board); R2gira(board); R2giraJ(board);
    const rot90 = ((Math.round(viewRotationDeg / 90) % 4) + 4) % 4;
    const axesSwapped = rot90 === 1 || rot90 === 3;
    // Sign that turns "even → visually above the pin" into a board-space offset.
@@ -11143,7 +11728,7 @@ index bc34fabb..7725702f 100644
  export function stepExpApproach(current: number, target: number, dtMs: number, rate: number): number {
    const delta = target - current;
 diff --git a/src/frontend/src/store/board-store.ts b/src/frontend/src/store/board-store.ts
-index e4d5a707..3857e86f 100644
+index e4d5a707..ef6b6dbe 100644
 --- a/src/frontend/src/store/board-store.ts
 +++ b/src/frontend/src/store/board-store.ts
 @@ -19,6 +19,7 @@ import { deriveBoardView } from './derive-board-view';
@@ -11202,16 +11787,17 @@ index e4d5a707..3857e86f 100644
  class BoardStore extends Emitter {
    private _tabs: BoardTab[] = [];
    private _activeTabId: number | null = null;
-@@ -790,7 +818,7 @@ class BoardStore extends Emitter {
+@@ -790,7 +818,8 @@ class BoardStore extends Emitter {
    get showPins(): boolean { return this.activeTab?.showPins ?? true; }
    get showOutlines(): boolean { return this.activeTab?.showOutlines ?? true; }
    get showLabels(): boolean { return this.activeTab?.showLabels ?? true; }
 -  get ghostMode(): GhostMode { return this.activeTab?.ghostMode ?? 'ghosts'; }
-+  get ghostMode(): GhostMode { return 'off'; } // 2R 18/10/2026: sem fantasmas do outro lado
++  // 2R 30/10/2026 (Roger: «voltar a função ghost… botão ao lado do bottom, top, butterfly»): volta a valer o modo da aba
++  get ghostMode(): GhostMode { return this.activeTab?.ghostMode ?? 'off'; }
    get showGhosts(): boolean { return this.ghostMode !== 'off'; }
    get discoHighlight(): boolean { return this.ghostMode === 'disco'; }
    get hideGhosts(): boolean { return this.activeTab?.hideGhosts ?? false; }
-@@ -965,6 +993,10 @@ class BoardStore extends Emitter {
+@@ -965,6 +994,10 @@ class BoardStore extends Emitter {
      this.notify();
    }
  
@@ -11222,7 +11808,7 @@ index e4d5a707..3857e86f 100644
    private updateActiveTab(patch: Partial<BoardTab>) {
      const tab = this.activeTab;
      if (!tab) return;
-@@ -1004,7 +1036,7 @@ class BoardStore extends Emitter {
+@@ -1004,7 +1037,7 @@ class BoardStore extends Emitter {
        showPins: true,
        showOutlines: true,
        showLabels: true,
@@ -11231,7 +11817,7 @@ index e4d5a707..3857e86f 100644
        layerStates: [],
        selectedLayerIndex: null,
        fixatedLayerIndex: null,
-@@ -1268,6 +1300,12 @@ class BoardStore extends Emitter {
+@@ -1268,6 +1301,12 @@ class BoardStore extends Emitter {
  
    async loadFiles(files: FileList | File[]) {
      const list = Array.from(files);
@@ -11244,7 +11830,7 @@ index e4d5a707..3857e86f 100644
      // Plain-ASC boards arrive as the three files the sections are named after
      // — format.asc / nails.asc / pins.asc (issue #26). Selecting them together
      // means "this is one board", not "open three tabs", so bundle them back
-@@ -1367,7 +1405,7 @@ class BoardStore extends Emitter {
+@@ -1367,7 +1406,7 @@ class BoardStore extends Emitter {
        showPins: true,
        showOutlines: true,
        showLabels: true,
@@ -11253,7 +11839,7 @@ index e4d5a707..3857e86f 100644
        layerStates: [],
        selectedLayerIndex: null,
        fixatedLayerIndex: null,
-@@ -2307,10 +2345,11 @@ class BoardStore extends Emitter {
+@@ -2307,10 +2346,11 @@ class BoardStore extends Emitter {
    cycleDimMode() {
      const tab = this.activeTab;
      if (!tab) return;
@@ -11268,7 +11854,7 @@ index e4d5a707..3857e86f 100644
      this.updateActiveTab({ dimMode: next });
      this._saveCurrentViewPrefs();
      this.notify();
-@@ -2332,6 +2371,7 @@ class BoardStore extends Emitter {
+@@ -2332,6 +2372,7 @@ class BoardStore extends Emitter {
    toggleFollowPdf() {
      const tab = this.activeTab;
      if (!tab) return;
@@ -11276,7 +11862,7 @@ index e4d5a707..3857e86f 100644
      this.updateActiveTab({ followPdf: !tab.followPdf });
      this._saveCurrentViewPrefs();
      this.notify();
-@@ -2367,8 +2407,8 @@ class BoardStore extends Emitter {
+@@ -2367,8 +2408,8 @@ class BoardStore extends Emitter {
      const indices = new Set<number>();
      for (let i = 0; i < board.parts.length; i++) {
        const p = board.parts[i];
@@ -11287,7 +11873,7 @@ index e4d5a707..3857e86f 100644
          results.push(p);
          indices.add(i);
        }
-@@ -2394,8 +2434,8 @@ class BoardStore extends Emitter {
+@@ -2394,8 +2435,8 @@ class BoardStore extends Emitter {
      if (!tab?.board || !tab.searchQuery) return [];
      const ql = tab.searchQuery.toLowerCase();
      return tab.board.parts.filter(p =>
@@ -11298,7 +11884,7 @@ index e4d5a707..3857e86f 100644
      );
    }
  
-@@ -2431,7 +2471,7 @@ class BoardStore extends Emitter {
+@@ -2431,7 +2472,7 @@ class BoardStore extends Emitter {
      if (idx < 0) return false;
  
      const part = viewPart(tab, idx) ?? tab.board.parts[idx];
@@ -11307,7 +11893,7 @@ index e4d5a707..3857e86f 100644
        if (part.side === 'top' && !tab.showTop) {
          Object.assign(tab, { showTop: true, showBottom: false });
        } else if (part.side === 'bottom' && !tab.showBottom) {
-@@ -2458,6 +2498,29 @@ class BoardStore extends Emitter {
+@@ -2458,6 +2499,29 @@ class BoardStore extends Emitter {
      return true;
    }
  
@@ -11337,7 +11923,7 @@ index e4d5a707..3857e86f 100644
    focusPart(name: string, nav?: NavOpts) {
      this._clearPreviewPulse();
      const tab = this.activeTab;
-@@ -2469,7 +2532,7 @@ class BoardStore extends Emitter {
+@@ -2469,7 +2533,7 @@ class BoardStore extends Emitter {
      const part = viewPart(tab, idx) ?? tab.board.parts[idx];
  
      // If the part is on the other side and we're not in butterfly mode, flip to it
@@ -11346,7 +11932,7 @@ index e4d5a707..3857e86f 100644
        if (part.side === 'top' && !tab.showTop) {
          this.updateActiveTab({ showTop: true, showBottom: false });
        } else if (part.side === 'bottom' && !tab.showBottom) {
-@@ -2515,7 +2578,7 @@ class BoardStore extends Emitter {
+@@ -2515,7 +2579,7 @@ class BoardStore extends Emitter {
      // side is a view change, not a selection change, so it does not violate
      // preview's contract — and without it, previewing a bottom-side neighbour
      // flew the camera to a blank patch of the top side.
@@ -11355,7 +11941,7 @@ index e4d5a707..3857e86f 100644
        if (part.side === 'top' && !tab.showTop) {
          this.updateActiveTab({ showTop: true, showBottom: false });
        } else if (part.side === 'bottom' && !tab.showBottom) {
-@@ -2579,7 +2642,7 @@ class BoardStore extends Emitter {
+@@ -2579,7 +2643,7 @@ class BoardStore extends Emitter {
      if (!tab?.board || !part) return;
      const pin = part.pins[pinIndex];
  

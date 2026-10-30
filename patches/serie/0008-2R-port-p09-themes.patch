@@ -1,7 +1,7 @@
 From 85a6c297a0908186960c0742fba7e38e01b721d3 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:29:47 -0300
-Subject: [PATCH 08/22] 2R port p09 themes
+Subject: [PATCH 08/31] 2R port p09 themes
 
 ---
  src/frontend/src/store/themes.ts | 359 ++++++++++++++++++++++++++++++-

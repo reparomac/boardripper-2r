@@ -7,7 +7,7 @@ Nada disto foi enviado ao GitHub.
   https://github.com/AlexeyInwerp/BoardRipper (`git apply` na raiz do repositório). Inclui a 2R da 0.48.0
   (`2rtools-customizacoes-0.48.0.patch` + `GuidePanel.tsx` + `logo2r-print.ts`) e, portadas para o código-fonte
   (TypeScript), todas as edições feitas à mão no bundle `index-BscvDDFO.js` e no CSS de 12/10 a 27/10/2026.
-- `serie/` — as mesmas mudanças em 22 passos (`git am serie/*.patch`), para ver o que mudou em cada parte.
+- `serie/` — as mesmas mudanças em 31 passos (`git am serie/*.patch`), para ver o que mudou em cada parte.
 - `fonte-modificado-0.50.2.tar.gz` — os 74 arquivos do fonte já modificados (prontos para comparar).
 - `REFAZER_BOARDRIPPER_0.50.2.command` — refaz a página e o servidor a partir do upstream (precisa de git, node e go).
 
@@ -30,3 +30,12 @@ Nada disto foi enviado ao GitHub.
    da 2R (os scripts 2R ficam no `index.html`, não no bundle).
 4. O servidor (`src/backend`) não mudou entre 0.48.0 e 0.50.2; se mudar, compilar com o `bind-host`
    (já está no patch) para darwin/arm64 e windows/amd64.
+
+## Atualização 30/10/2026
+
+- Busca de placa doadora (`components/DoadoraBusca2R.tsx`): código da peça, posição ou linha, acervo online/local,
+  até 20 placas; botão direito numa peça/linha abre a busca. Quem responde é o SDS (`window.__2rAcervo.pecas`).
+- Botão Ghost ao lado de Top / Bottom / Butterfly (`overlay/slots/SideSwitch.tsx`): todos os componentes do lado
+  escondido transparentes com contorno vermelho neon (`renderer/BoardRenderer.ts`, `r2GhostOutroLado`);
+  segundo clique: Disco; terceiro: desliga.
+- Item ativo da barra lateral: ícone e texto brancos, fundo preto, contorno laranja.

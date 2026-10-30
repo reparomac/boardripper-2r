@@ -1,0 +1,98 @@
+From b532243d12279ef3da58117d071cc9fd566a3924 Mon Sep 17 00:00:00 2001
+From: Roger 2R <reparomacbr@gmail.com>
+Date: Thu, 29 Oct 2026 03:03:12 -0300
+Subject: [PATCH 25/31] =?UTF-8?q?2R:=20ponto=20mais=20pr=C3=B3ximo=20do=20?=
+ =?UTF-8?q?mesmo=20lado=20da=20placa;=20recupera=20a=20placa=20quando=20a?=
+ =?UTF-8?q?=20p=C3=A1gina=20volta=20a=20aparecer=20(29/10/2026)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/r2/guide-store.ts         |  9 +++++-
+ src/frontend/src/renderer/BoardRenderer.ts | 33 ++++++++++++++++++++++
+ 2 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/src/frontend/src/r2/guide-store.ts b/src/frontend/src/r2/guide-store.ts
+index 1fd3fa5d..873d2ff9 100644
+--- a/src/frontend/src/r2/guide-store.ts
++++ b/src/frontend/src/r2/guide-store.ts
+@@ -253,11 +253,18 @@ function r2Perto(p: { x: number; y: number; side?: string } | null | undefined):
+     if (!c || !b || !c.points.length || c.points[0].fixed) return 0;
+     let a = c.points.map((t, k) => ({ t, k })).filter(o => o.t.kind !== 'outro');
+     if (!a.length) a = c.points.map((t, k) => ({ t, k }));
++    /* 2R 29/10/2026 (Roger: «ir para o ponto mais próximo e de preferência do mesmo lado da placa… entre dois pontos
++       próximos sendo um de cada lado, dar preferência para um outro ponto do mesmo lado»): ponto do OUTRO lado só
++       ganha se estiver 3× mais perto (distância ao quadrado × 9). Sem ponto anterior com lado, vale o lado que está
++       na tela. Desligar: window.__r2LadoPeso = 1 */
++    const lado = p.side ?? (() => { const t = boardStore.activeTab; return t && !t.butterfly && t.showTop !== t.showBottom ? (t.showTop ? 'top' : 'bottom') : undefined; })();
++    const k2 = Math.pow(Number((r2w as unknown as { __r2LadoPeso?: number }).__r2LadoPeso) || 3, 2);
+     let m = 0, d = Infinity;
+     for (const o of a) {
+       const pt = b.parts[o.t.partIndex], q = pt?.pins[o.t.pinIndex];
+       if (!q) continue;
+-      const e = (q.position.x - p.x) ** 2 + (q.position.y - p.y) ** 2 + (p.side != null && pt.side != null && pt.side !== p.side ? 1e-9 : 0);
++      const outro = lado != null && pt.side != null && (pt.side === 'top' || pt.side === 'bottom') && pt.side !== lado;
++      const e = ((q.position.x - p.x) ** 2 + (q.position.y - p.y) ** 2) * (outro ? k2 : 1);
+       if (e < d) { d = e; m = o.k; }
+     }
+     return m;
+diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
+index 93c72f4e..8364839e 100644
+--- a/src/frontend/src/renderer/BoardRenderer.ts
++++ b/src/frontend/src/renderer/BoardRenderer.ts
+@@ -1678,9 +1678,36 @@ export class BoardRenderer {
+     };
+     this.boundContextRestored = () => {
+       log.render.log(`WebGL context restored event tab=${this.tabId} — deferring recovery to resume()`);
++      this.r2RecoverIfVisible();
+     };
+     canvas.addEventListener('webglcontextlost', this.boundContextLost);
+     canvas.addEventListener('webglcontextrestored', this.boundContextRestored);
++    /* 2R 29/10/2026 (Roger: «quando fui preencher a ficha de reparo e voltei para o ripper, tava em nada... só a tela de
++       fundo»): no SDS a página inteira some quando se troca de ferramenta — o contexto WebGL pode ser perdido enquanto ela
++       está escondida, mas o painel do Dockview nunca deixou de estar «visível», então ninguém chamava resume() e a placa
++       ficava em branco. Ao a página voltar a aparecer (ou ganhar foco), recupera. */
++    if (!this.r2BoundVis) {
++      this.r2BoundVis = () => this.r2RecoverIfVisible();
++      document.addEventListener('visibilitychange', this.r2BoundVis);
++      window.addEventListener('focus', this.r2BoundVis);
++      window.addEventListener('pageshow', this.r2BoundVis);
++    }
++  }
++
++  private r2BoundVis: (() => void) | null = null;
++  private r2RecoverIfVisible() {
++    try {
++      if (this.destroyed || this.panelPaused || document.visibilityState !== 'visible') return;
++      if (this.contextLost && !this.reinitializing) {
++        log.render.log(`page visible again with a lost context tab=${this.tabId} — recovering`);
++        setTimeout(() => { if (!this.destroyed && !this.panelPaused && this.contextLost) this.resume(); }, 60);
++      } else if (this.initialized && this.app?.ticker && !this.app.ticker.started) {
++        this.app.ticker.start();
++        this.needsRender = true;
++      } else {
++        this.needsRender = true;
++      }
++    } catch { /* */ }
+   }
+ 
+   /** Remove context loss handlers from the current canvas. */
+@@ -8798,6 +8825,12 @@ export class BoardRenderer {
+   }
+ 
+   destroy() {
++    if (this.r2BoundVis) {
++      document.removeEventListener('visibilitychange', this.r2BoundVis);
++      window.removeEventListener('focus', this.r2BoundVis);
++      window.removeEventListener('pageshow', this.r2BoundVis);
++      this.r2BoundVis = null;
++    }
+     this.destroyed = true;
+     // destroy() is the full-teardown path (tab closed) and does NOT route
+     // through teardownForReinit() — unregister here too, or a closed tab's
+-- 
+2.43.0
+

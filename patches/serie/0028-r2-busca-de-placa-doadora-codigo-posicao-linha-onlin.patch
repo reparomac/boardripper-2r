@@ -1,0 +1,352 @@
+From 8c9be83d69b2952758b9ef1a14146c7b271a01b9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 02:14:57 -0300
+Subject: [PATCH 28/31] r2: busca de placa doadora (codigo/posicao/linha,
+ online/local, ate 20), botao direito abre a busca, item ativo da barra
+ lateral branco com contorno laranja
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/components/ContextMenu.tsx   |  28 +++
+ .../src/components/DoadoraBusca2R.tsx         | 201 ++++++++++++++++++
+ src/frontend/src/components/Toolbar.tsx       |   3 +
+ src/frontend/src/index.css                    |  43 ++++
+ 4 files changed, 275 insertions(+)
+ create mode 100644 src/frontend/src/components/DoadoraBusca2R.tsx
+
+diff --git a/src/frontend/src/components/ContextMenu.tsx b/src/frontend/src/components/ContextMenu.tsx
+index 494df8dc..da6a6d77 100644
+--- a/src/frontend/src/components/ContextMenu.tsx
++++ b/src/frontend/src/components/ContextMenu.tsx
+@@ -644,6 +644,32 @@ export function ContextMenu() {
+       );
+     })() : null;
+ 
++    // 2R 30/10/2026 (Roger: «quando clicar em cima de uma linha ou componente, ter a opção de buscar na placa
++    // doadora e daí abre o painel completo»): abre a busca de placa doadora já com o componente ou a linha
++    const doadora = (termo: string) => (e: React.MouseEvent) => {
++      e.stopPropagation();
++      contextMenuStore.hide();
++      window.dispatchEvent(new CustomEvent('r2-doadora', { detail: { q: termo } }));
++    };
++    const temDoadora = !!(window as unknown as { __2rAcervo?: { pecas?: unknown } }).__2rAcervo?.pecas;
++    const doadoraItems = temDoadora && (componentName.trim() || state.netName) ? (
++      <React.Fragment key="r2-doadora">
++        {componentName.trim() && (
++          <div className="context-menu-item context-menu-search-donors" onClick={doadora(componentName.trim())}
++               data-testid="ctx-doadora-peca" title="Em quais placas do Acervo 2R existe esta posição">
++            Placa doadora: buscar &apos;{componentName}&apos;
++          </div>
++        )}
++        {state.netName && (
++          <div className="context-menu-item context-menu-search-donors" onClick={doadora(state.netName)}
++               data-testid="ctx-doadora-linha" title="Em quais placas do Acervo 2R existe esta linha">
++            Placa doadora: buscar a linha &apos;{state.netName}&apos;
++          </div>
++        )}
++        <div className="context-menu-separator" />
++      </React.Fragment>
++    ) : null;
++
+     const nothingToSearch =
+       boundOpen.length === 0 &&
+       otherPdfNames.length === 0 &&
+@@ -653,6 +679,7 @@ export function ContextMenu() {
+       // Still show the "Search all donors" escape hatch when no PDFs are open.
+       return (
+         <>
++          {doadoraItems}
+           {partVisibilityItems}
+           <div className="context-menu-item disabled">
+             Search &apos;{componentName}&apos; in PDF (none open)
+@@ -674,6 +701,7 @@ export function ContextMenu() {
+     }
+ 
+     const sections: React.ReactNode[] = [];
++    if (doadoraItems) sections.push(doadoraItems);
+     if (partVisibilityItems) sections.push(partVisibilityItems);
+ 
+     // Helper: emit one donor row for a PDF. The row click triggers the
+diff --git a/src/frontend/src/components/DoadoraBusca2R.tsx b/src/frontend/src/components/DoadoraBusca2R.tsx
+new file mode 100644
+index 00000000..57d88cbe
+--- /dev/null
++++ b/src/frontend/src/components/DoadoraBusca2R.tsx
+@@ -0,0 +1,201 @@
++import { useEffect, useRef, useState } from 'react';
++import { createPortal } from 'react-dom';
++import { boardStore } from '../store/board-store';
++import { uiZoom } from '../store/ui-zoom';
++
++/**
++ * 2R Tools — busca de placa doadora (Roger, 30/10/2026: «preciso ter uma busca geral em placa doadora, procurar
++ * componentes… essa busca pode ser no acervo online e acervo local… escolher e limitar 20 resultados»).
++ * Código da peça (CD3217B12), posição (U8100) ou linha (PP3V3_G3H) → até 20 placas do Acervo 2R; o clique (ou Enter)
++ * abre a placa com a peça marcada. Quem responde é o SDS (window.__2rAcervo.pecas → core/acervo_pecas.py).
++ */
++type Row = { id: string; pdf: string; board: string; model: string; name: string; pos: string[]; n: number;
++             baixada: boolean; kind: string; fonte: string };
++type Res = { rows: Row[]; total?: number; tipo?: string; online?: boolean; erro?: string };
++type Api = { pecas?: (q: string, onde: string) => Promise<Res>; open: (id: string) => Promise<unknown>;
++             aprende?: (d: unknown) => Promise<unknown> };
++const api = (): Api | undefined => (window as unknown as { __2rAcervo?: Api }).__2rAcervo;
++
++type Onde = 'online' | 'local' | 'ambos';
++const ONDE_KEY = '2r-doadora-onde';
++const lerOnde = (): Onde => { try { const v = localStorage.getItem(ONDE_KEY); return v === 'online' || v === 'local' ? v : 'ambos'; } catch { return 'ambos'; } };
++
++// ── depois de abrir: marca a peça/linha assim que a placa carregar ──
++let pendente: { alvos: string[]; linha: boolean; ate: number } | null = null;
++function tentarMarcar(): boolean {
++  if (!pendente) return true;
++  if (Date.now() > pendente.ate) { pendente = null; return true; }
++  const b = boardStore.board;
++  if (!b) return false;
++  if (pendente.linha) {
++    const nome = pendente.alvos.find(n => b.nets.has(n)) ?? [...b.nets.keys()].find(n => pendente!.alvos.some(a => n.toUpperCase().startsWith(a)));
++    if (!nome) return false;
++    boardStore.focusNet(nome);
++  } else {
++    const nomes = new Set(b.parts.map(p => p.name.toUpperCase()));
++    const alvo = pendente.alvos.find(a => nomes.has(a));
++    if (!alvo) return false;
++    const real = b.parts.find(p => p.name.toUpperCase() === alvo)!.name;
++    boardStore.focusPart(real);
++  }
++  pendente = null;
++  return true;
++}
++
++// ── toda placa aberta ensina as posições e linhas dela (busca local) ──
++let ensinou = '';
++function ensinar() {
++  const b = boardStore.board, t = boardStore.activeTab, a = api();
++  if (!b || !t || !a?.aprende) return;
++  const chave = t.fileName + ':' + b.parts.length;
++  if (chave === ensinou) return;
++  ensinou = chave;
++  void a.aprende({ name: t.fileName, parts: b.parts.map(p => p.name), nets: [...b.nets.keys()] });
++}
++
++let instalado = false;
++function instalar() {
++  if (instalado) return;
++  instalado = true;
++  boardStore.subscribe(() => {
++    if (pendente) tentarMarcar();
++    window.setTimeout(ensinar, 1500);
++  });
++}
++
++export function DoadoraBusca2R() {
++  const [q, setQ] = useState('');
++  const [onde, setOnde] = useState<Onde>(lerOnde);
++  const [res, setRes] = useState<Res | null>(null);
++  const [busy, setBusy] = useState(false);
++  const [open, setOpen] = useState(false);
++  const [sel, setSel] = useState(0);
++  const [abrindo, setAbrindo] = useState('');
++  const wrap = useRef<HTMLDivElement | null>(null);
++  const inp = useRef<HTMLInputElement | null>(null);
++  const pop = useRef<HTMLDivElement | null>(null);
++  const seq = useRef(0);
++
++  useEffect(() => { instalar(); }, []);
++  useEffect(() => {                                   // botão direito numa peça/linha: abre já buscando
++    const ev = (e: Event) => {
++      const termo = String((e as CustomEvent).detail?.q || '').trim();
++      if (!termo) return;
++      setQ(termo); setOpen(true);
++      window.setTimeout(() => inp.current?.focus(), 50);
++    };
++    window.addEventListener('r2-doadora', ev);
++    return () => window.removeEventListener('r2-doadora', ev);
++  }, []);
++  useEffect(() => { try { localStorage.setItem(ONDE_KEY, onde); } catch { /* */ } }, [onde]);
++
++  useEffect(() => {
++    const termo = q.trim();
++    if (termo.length < 3 || !api()?.pecas) { setRes(null); setBusy(false); return; }
++    const n = ++seq.current;
++    setBusy(true);
++    const t = window.setTimeout(() => {
++      api()!.pecas!(termo, onde).then(r => { if (n === seq.current) { setRes(r); setSel(0); setOpen(true); } })
++        .catch(() => { if (n === seq.current) setRes({ rows: [], erro: 'sem resposta do SDS' }); })
++        .finally(() => { if (n === seq.current) setBusy(false); });
++    }, 280);
++    return () => window.clearTimeout(t);
++  }, [q, onde]);
++
++  useEffect(() => {
++    if (!open) return;
++    const fora = (e: MouseEvent) => {
++      const t = e.target as Node;
++      if (wrap.current?.contains(t) || pop.current?.contains(t)) return;
++      setOpen(false);
++    };
++    document.addEventListener('mousedown', fora);
++    return () => document.removeEventListener('mousedown', fora);
++  }, [open]);
++
++  const abrir = async (r: Row) => {
++    const a = api();
++    if (!a) return;
++    const termo = q.trim().toUpperCase().replace(/\s+/g, '');
++    const linha = res?.tipo === 'linha';
++    const alvos = r.pos.length ? r.pos : [termo];
++    pendente = alvos.length ? { alvos, linha, ate: Date.now() + 60000 } : null;
++    setAbrindo(r.id);
++    try { await a.open(r.id); } finally { window.setTimeout(() => setAbrindo(''), 1500); }
++    setOpen(false);
++    let tent = 0;                                     // a placa pode já estar aberta (nenhuma notificação nova)
++    const loop = () => { if (!tentarMarcar() && ++tent < 120) window.setTimeout(loop, 500); };
++    window.setTimeout(loop, 400);
++    if (alvos.length) boardStore.addToast(linha ? `Abrindo a placa com a linha ${termo} marcada…`
++      : `Abrindo a placa com ${alvos.slice(0, 3).join(' · ')} marcada${alvos.length > 1 ? 's' : ''}…`, 'info');
++  };
++
++  const rows = res?.rows ?? [];
++  const onKey = (e: React.KeyboardEvent) => {
++    if (e.key === 'ArrowDown') { setOpen(true); setSel(s => Math.min(rows.length - 1, s + 1)); e.preventDefault(); }
++    else if (e.key === 'ArrowUp') { setSel(s => Math.max(0, s - 1)); e.preventDefault(); }
++    else if (e.key === 'Enter') { if (rows[sel]) void abrir(rows[sel]); e.preventDefault(); }
++    else if (e.key === 'Escape') { setOpen(false); }
++    e.stopPropagation();
++  };
++
++  const rect = wrap.current?.getBoundingClientRect();
++  const z = uiZoom();
++  const tipoTxt = res?.tipo === 'posicao' ? 'posição' : res?.tipo === 'linha' ? 'linha' : 'código da peça';
++  const ondeTxt = onde === 'online' ? 'Acervo online' : onde === 'local' ? 'Acervo local (baixadas)' : 'Acervo online + local';
++
++  return (
++    <div className="r2-doadora" ref={wrap} data-testid="doadora-busca"
++         title="Placa doadora: em quais placas do Acervo 2R existe a peça — código (CD3217B12), posição (U8100) ou linha (PP3V3_G3H)">
++      {/* na barra só o botão (a barra já tem os ícones e a busca); o campo fica na janelinha */}
++      <button className={`r2-doadora-btn ${open ? 'on' : ''}`} data-testid="doadora-btn"
++              onClick={() => { setOpen(o => !o); window.setTimeout(() => inp.current?.focus(), 30); }}>
++        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
++             strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
++        PLACA DOADORA
++      </button>
++      {open && rect && createPortal(
++        <div className="r2-doadora-pop" ref={pop} data-testid="doadora-pop"
++             style={{ left: Math.max(8, Math.min(rect.left / z, window.innerWidth / z - 628)), top: rect.bottom / z + 6, width: 620 }}>
++          {/* onde procurar: dentro da lista para não apertar a barra (que já tem os ícones e a busca) */}
++          <div className="r2-doadora-topo">
++            <input ref={inp} className="r2-doadora-in" value={q} placeholder="código da peça, posição ou linha"
++                   spellCheck={false} autoCorrect="off" autoCapitalize="characters" autoFocus
++                   onChange={e => setQ(e.target.value)} onKeyDown={onKey} data-testid="doadora-input" />
++            <div className="r2-doadora-seg" role="group">
++              {(['online', 'local', 'ambos'] as Onde[]).map(o => (
++                <button key={o} className={onde === o ? 'on' : ''} onClick={() => setOnde(o)} data-testid={`doadora-${o}`}
++                        title={o === 'online' ? 'Todo o Acervo 2R' : o === 'local' ? 'Só as placas já baixadas neste computador' : 'Online e local'}>
++                  {o === 'online' ? 'ONLINE' : o === 'local' ? 'LOCAL' : 'OS DOIS'}
++                </button>
++              ))}
++            </div>
++            <span className="r2-doadora-max">máx. 20 placas</span>
++          </div>
++          {q.trim().length < 3 ? <div className="r2-doadora-vazio">Exemplos: CD3217B12 (código da peça), U8100 (posição) ou PP3V3_G3H (linha).</div> : <>
++          <div className="r2-doadora-head">
++            {busy ? 'Procurando…' : res?.erro ? `Não consegui buscar: ${res.erro}`
++              : <>{rows.length}{(res?.total ?? 0) > rows.length ? ` de ${res!.total}` : ''} placa{rows.length === 1 ? '' : 's'} com <b>{q.trim().toUpperCase()}</b> · {tipoTxt} · {ondeTxt}</>}
++          </div>
++          {rows.map((r, i) => (
++            <button key={r.id} className={`r2-doadora-row ${i === sel ? 'sel' : ''}`} onMouseEnter={() => setSel(i)}
++                    onClick={() => void abrir(r)} data-testid="doadora-row" title={r.name}>
++              <span className="r2-dr-board">{r.board || r.name}</span>
++              <span className="r2-dr-model">{r.model}</span>
++              <span className="r2-dr-pos">{r.pos.join(' · ')}</span>
++              <span className="r2-dr-n">{abrindo === r.id ? 'abrindo…' : `${r.n} peça${r.n === 1 ? '' : 's'}`}</span>
++              <span className={`r2-dr-tag ${r.baixada ? 'ok' : ''}`}>{r.baixada ? 'BAIXADA' : '☁ NUVEM'}</span>
++            </button>
++          ))}
++          {!busy && !res?.erro && rows.length === 0 && (
++            <div className="r2-doadora-vazio">
++              Nenhuma placa com esse termo{onde === 'local' ? ' entre as baixadas' : ''}.
++              {res && res.online === false ? ' O índice de peças do acervo online ainda não foi gerado — por enquanto a busca usa as placas já abertas neste computador (posição e linha).' : ''}
++            </div>
++          )}
++          </>}
++          <div className="r2-doadora-pe">Enter ou clique: abre a placa com a peça marcada · também busca posição (U8100) e linha (PP3V3_G3H)</div>
++        </div>, document.body)}
++    </div>
++  );
++}
+diff --git a/src/frontend/src/components/Toolbar.tsx b/src/frontend/src/components/Toolbar.tsx
+index cdc3c5d7..c2b41eb3 100644
+--- a/src/frontend/src/components/Toolbar.tsx
++++ b/src/frontend/src/components/Toolbar.tsx
+@@ -4,6 +4,7 @@ import { IconBoxMultiple, IconLayoutBoardSplit, IconUpload, IconDownload, IconIn
+ import { boardStore } from '../store/board-store';
+ import { IS_2R } from '../r2/env';
+ import { MenuBar2R } from './MenuBar2R';
++import { DoadoraBusca2R } from './DoadoraBusca2R';
+ import logo2r from '../assets/2r-logo.png';
+ import { NavBar2R } from './NavBar2R';
+ import { PinSearch } from './ScopedSearch2R';
+@@ -762,6 +763,8 @@ export function Toolbar() {
+ 
+       {/* ── Search, centred ── (2R: à direita, com escopo «Tudo / No componente») */}
+       <div className="toolbar-spacer" />
++      {/* 2R 30/10/2026: busca de placa doadora (código da peça, posição ou linha no Acervo 2R) */}
++      {IS_2R && <DoadoraBusca2R />}
+       {IS_2R ? <Search2R /> : <GlobalSearch />}
+       {IS_2R && <ThemeButton2R />}
+       {!IS_2R && <div className="toolbar-spacer" />}
+diff --git a/src/frontend/src/index.css b/src/frontend/src/index.css
+index c3c3a95a..988651ba 100644
+--- a/src/frontend/src/index.css
++++ b/src/frontend/src/index.css
+@@ -10994,3 +10994,46 @@ button[aria-pressed="true"][title*="Grava" i] {
+   color: #fff !important;
+   border-color: rgba(255, 255, 255, 0.85) !important;
+ }
++
++/* 2R 30/10/2026 — busca de placa doadora (laranja do «Em teste») */
++.r2-doadora { display:flex; align-items:center; margin-right:8px; flex:none; }
++.r2-doadora-btn { display:flex; align-items:center; gap:6px; height:26px; padding:0 10px; border:1px solid #E0A040;
++  border-radius:7px; background:#000; color:#E0A040; font-size:10px; font-weight:800; letter-spacing:1.3px; cursor:pointer; white-space:nowrap; }
++.r2-doadora-btn:hover, .r2-doadora-btn.on { color:#fff; }
++.r2-doadora-rot { color:#E0A040; font-size:10px; font-weight:800; letter-spacing:1.4px; white-space:nowrap; }
++.r2-doadora-in { flex:1; min-width:0; height:30px; padding:0 10px; background:#000; border:1px solid #E0A040; border-radius:7px; outline:0; color:#fff; font-size:13px;
++  font-family: Menlo, Consolas, monospace; text-transform:uppercase; }
++.r2-doadora-in::placeholder { color:#6B7078; text-transform:none; font-family:inherit; }
++.r2-doadora-seg { display:flex; border:1px solid #3A3D44; border-radius:5px; overflow:hidden; }
++.r2-doadora-seg button { background:transparent; color:#C9CDD3; border:0; padding:2px 6px; font-size:9.5px;
++  font-weight:800; letter-spacing:.6px; cursor:pointer; }
++.r2-doadora-seg button + button { border-left:1px solid #3A3D44; }
++.r2-doadora-seg button.on { background:#E0A040; color:#000; }
++.r2-doadora-max { color:#6B7078; font-size:10px; white-space:nowrap; padding-right:4px; }
++.r2-doadora-pop { position:fixed; z-index:10050; background:#16171A; border:1px solid #3A3D44; border-radius:10px;
++  box-shadow:0 14px 40px rgba(0,0,0,.55); padding:4px 0 6px; max-height:70vh; overflow:auto; }
++.r2-doadora-head { color:#9AA0A8; font-size:12px; padding:8px 14px 6px; }
++.r2-doadora-head b { color:#fff; }
++.r2-doadora-row { display:grid; grid-template-columns: 110px 70px 1fr auto auto; align-items:center; gap:12px; width:100%;
++  text-align:left; background:transparent; border:0; border-top:1px solid #23262B; color:#EDEDED; padding:9px 14px;
++  cursor:pointer; font-size:13px; }
++.r2-doadora-row.sel { background:#000; outline:1px solid #E0A040; outline-offset:-1px; }
++.r2-dr-board { font-weight:800; font-family: Menlo, Consolas, monospace; }
++.r2-dr-model { color:#E0A040; font-weight:700; }
++.r2-dr-pos { color:#C9CDD3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
++.r2-dr-n { color:#8A9099; font-size:12px; white-space:nowrap; }
++.r2-dr-tag { font-size:10px; font-weight:800; letter-spacing:.8px; border:1px solid #6B7078; color:#C9CDD3;
++  border-radius:4px; padding:2px 6px; white-space:nowrap; }
++.r2-dr-tag.ok { border-color:#39C46A; color:#39C46A; }
++.r2-doadora-vazio { color:#9AA0A8; font-size:12.5px; padding:10px 14px; line-height:1.45; }
++.r2-doadora-pe { color:#6B7078; font-size:11.5px; padding:8px 14px 2px; border-top:1px solid #23262B; }
++.r2-doadora-topo { display:flex; align-items:center; gap:10px; padding:8px 14px 4px; }
++.r2-doadora-topo .r2-doadora-seg button { font-size:10.5px; padding:3px 10px; }
++
++/* 2R 30/10/2026 (Roger: «esse ícone do acervo, não gostei dele colorido… mantém no nosso padrão»): item ativo da
++   barra lateral igual à aba em foco do SDS — fundo preto, contorno laranja, ícone e texto brancos */
++.activity-rail-item.active,
++.activity-rail-item[aria-pressed="true"] {
++  color: #ffffff !important;
++  box-shadow: 0 0 0 1.5px #E0A040 !important;
++}
+-- 
+2.43.0
+

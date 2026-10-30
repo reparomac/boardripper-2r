@@ -1,7 +1,7 @@
 From 808f7f85ff92ad9390f0dfb98508f9929534fb1b Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:33:09 -0300
-Subject: [PATCH 10/22] 2R port p12 label overlay
+Subject: [PATCH 10/31] 2R port p12 label overlay
 
 ---
  src/frontend/src/r2/hand-labels.ts         | 105 +++++++++++++++++++++

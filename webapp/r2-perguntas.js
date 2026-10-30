@@ -154,18 +154,18 @@
       '#r2perg .ls{overflow:auto;padding:8px 12px;flex:1 1 auto;min-height:0}' +
       '#r2perg .it{border:1px solid #2B2F35;border-radius:8px;padding:8px 10px;margin:0 0 8px;background:#181B1F}' +
       '#r2perg .it.sim{border-color:rgba(111,174,125,.7)}#r2perg .it.nao{border-color:rgba(232,161,58,.85)}' +
-      '#r2perg .q{font-weight:700}#r2perg .q b{color:#D4B26A;margin-right:6px}' +
+      '#r2perg .q{font-weight:700}#r2perg .q b{color:#E0A040;margin-right:6px}' +
       '#r2perg .nets{font:11px Menlo,Consolas,monospace;color:#A3A9B1;margin-top:2px;word-break:break-all}' +
       '#r2perg .nets span{cursor:pointer;text-decoration:underline dotted}#r2perg .nets span:hover{color:#fff}' +
       '#r2perg .esp{color:#8fcf9c;margin-top:4px}#r2perg .dica{color:#E8A13A;margin-top:4px;display:none}#r2perg .it.nao .dica{display:block}' +
       '#r2perg .bt{display:flex;gap:6px;margin-top:6px;align-items:center}' +
       '#r2perg .bt button{background:#000;color:#E6E8EB;border:1px solid #3A3F46;border-radius:6px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer}' +
-      '#r2perg .bt button.on{border-color:rgba(255,255,255,.85);color:#D4B26A}' +
+      '#r2perg .bt button.on{border-color:rgba(255,255,255,.85);color:#E0A040}' +
       '#r2perg .bt input{flex:1 1 auto;min-width:0;background:#0B0C0E;color:#F4F5F6;border:1px solid #2B2F35;border-radius:6px;padding:3px 8px;font:inherit;font-size:12px}' +
       '#r2perg .ft{padding:10px 12px;border-top:1px solid #2B2F35;display:flex;gap:8px;align-items:center;justify-content:space-between}' +
       '#r2perg .ft label{color:#A3A9B1;font-size:12px;display:flex;gap:6px;align-items:center}' +
       '#r2perg .go{background:#000;color:#fff;border:1px solid rgba(255,255,255,.85);border-radius:6px;padding:7px 14px;font:inherit;font-weight:700;cursor:pointer}' +
-      '#r2perg-reabrir{position:fixed;z-index:9400;bottom:44px;background:#000;color:#D4B26A;border:1px solid rgba(255,255,255,.85);border-radius:16px;padding:4px 12px;font:12px Inter,-apple-system,sans-serif;cursor:pointer;display:none}' +
+      '#r2perg-reabrir{position:fixed;z-index:9400;bottom:44px;background:#000;color:#E0A040;border:1px solid rgba(255,255,255,.85);border-radius:16px;padding:4px 12px;font:12px Inter,-apple-system,sans-serif;cursor:pointer;display:none}' +
       'body.r2-est-run #r2perg-reabrir.tem{display:block}';
     document.head.appendChild(st);
   }

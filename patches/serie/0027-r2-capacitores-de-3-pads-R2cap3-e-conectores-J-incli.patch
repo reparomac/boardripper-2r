@@ -1,0 +1,145 @@
+From af6e5fc95885300b2b11b884bca1a37ce4ef5793 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 00:51:33 -0300
+Subject: [PATCH 27/31] =?UTF-8?q?r2:=20capacitores=20de=203=20pads=20(R2ca?=
+ =?UTF-8?q?p3)=20e=20conectores=20J=20inclinados=20(R2giraJ)=20=E2=80=94?=
+ =?UTF-8?q?=20placa=20A2992=20820-02918?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/r2/hand-geom.ts         | 95 +++++++++++++++++++++++-
+ src/frontend/src/renderer/board-scene.ts |  4 +-
+ 2 files changed, 96 insertions(+), 3 deletions(-)
+
+diff --git a/src/frontend/src/r2/hand-geom.ts b/src/frontend/src/r2/hand-geom.ts
+index 61693f17..ea810705 100644
+--- a/src/frontend/src/r2/hand-geom.ts
++++ b/src/frontend/src/r2/hand-geom.ts
+@@ -1905,4 +1905,97 @@ function R2pads(b) {
+   } catch (e) {}
+ }
+ 
+-export { R2centro, R2viz, R2tam, R2lado, R2mira, R2raio, R2rEf, R2caixa, R2claro, R2drmosGiro, R2margem, R2pk, R2grande, R2uf, R2kf, R2cap4, R2gira, R2shunt, R2faixa, R2drmos, R2drmos2, R2pads, R2contorno, R2bob4, R2fpc };
++
++/*2R 29/10/2026 (prints do Roger, A2992 820-02918 — C9952/C9955/C9957/C9903: «vários problemas de layout… esses são corretos, se basear por aqui»): capacitor de polímero de 3 terminais (pinos 1 e 2 nas pontas, 3 no meio, todos em linha — reto ou a 45°). O corpo do arquivo ia do pino 1 ao 3 e o pad 2 ficava de fora. Agora: três pads redondos em linha, corpo em volta dos três (girado quando a peça está inclinada). window.__r2Cap3Off=true desliga*/ function R2cap3(b) {
++  if (!b || !b.parts || window.__r2Cap3Off === !0) return;
++  for (const P of b.parts) {
++    try {
++      if (!P || !P.pins || P.pins.length !== 3 || !/^C/i.test(P.name || "") || P.__r2cap3) continue;
++      if (P.pins.some((q) => !q || !q.position)) continue;
++      let best = null;
++      for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) {
++        const a = P.pins[i].position, c = P.pins[j].position, d = Math.hypot(a.x - c.x, a.y - c.y);
++        if (!best || d > best.d) best = { i, j, d };
++      }
++      if (!best || !(best.d > 0)) continue;
++      const E1 = P.pins[best.i].position, E2 = P.pins[best.j].position, M = P.pins[3 - best.i - best.j].position;
++      const ux = (E2.x - E1.x) / best.d, uy = (E2.y - E1.y) / best.d;
++      const t = (M.x - E1.x) * ux + (M.y - E1.y) * uy, off = Math.abs(-(M.x - E1.x) * uy + (M.y - E1.y) * ux);
++      if (!(t > best.d * 0.2 && t < best.d * 0.8) || off > best.d * 0.12) continue; /*só os 3 em linha, o do meio entre os outros*/
++      const gap = Math.min(t, best.d - t), D = gap * 0.94, r = D / 2;
++      for (const q of P.pins) {
++        const x = q.position.x, y = q.position.y;
++        q.padBounds = { minX: x - r, minY: y - r, maxX: x + r, maxY: y + r };
++        q.padShape = "round";
++        delete q.padWidth; delete q.padHeight; delete q.padAngleDeg; delete q.padPolygon; delete q.padCornerRadius;
++      }
++      const W = D * 1.08, L = best.d + D * 1.08, cx = (E1.x + E2.x) / 2, cy = (E1.y + E2.y) / 2;
++      if (Math.abs(ux) > 0.996 || Math.abs(uy) > 0.996) {
++        const hz = Math.abs(ux) >= Math.abs(uy);
++        P.__r2corpo = hz ? { x: cx - L / 2, y: cy - W / 2, w: L, h: W } : { x: cx - W / 2, y: cy - L / 2, w: W, h: L };
++      } else {
++        const vx = -uy, vy = ux, hl = L / 2, hw = W / 2;
++        P.__r2poly = [
++          [cx - ux * hl - vx * hw, cy - uy * hl - vy * hw], [cx + ux * hl - vx * hw, cy + uy * hl - vy * hw],
++          [cx + ux * hl + vx * hw, cy + uy * hl + vy * hw], [cx - ux * hl + vx * hw, cy - uy * hl + vy * hw],
++        ];
++        P.__r2gira = 1;
++      }
++      P.__r2shunt = 1; P.__r2pads = 1; P.__r2cap3 = 1;
++    } catch (e) {}
++  }
++}
++/*2R 29/10/2026 (prints do Roger, JE500/JE510 da 820-02918: no visualizador de referência o conector aparece girado; aqui ficava um retângulo reto): conector (J…) montado inclinado — o ângulo vem da fileira de contatos (pino vizinho mais próximo); entre 10° e 80°, o corpo vira o retângulo girado que envolve todos os pads (com 0,15 mm de folga). window.__r2GiraJOff=true desliga*/ function R2giraJ(b) {
++  if (!b || !b.parts || window.__r2GiraJOff === !0) return;
++  for (const P of b.parts) {
++    try {
++      if (!P || !P.pins || P.pins.length < 4 || P.pins.length > 80 || !/^J/i.test(P.name || "") || P.__r2poly) continue;
++      const pts = P.pins.filter((q) => q && q.position).map((q) => q.position);
++      if (pts.length < 4) continue;
++      const H = new Map();
++      for (let i = 0; i < pts.length; i++) {
++        let m = 1 / 0, dx = 0, dy = 0;
++        for (let j = 0; j < pts.length; j++) {
++          if (i === j) continue;
++          const x = pts[j].x - pts[i].x, y = pts[j].y - pts[i].y, d2 = x * x + y * y;
++          d2 > 1e-9 && d2 < m && ((m = d2), (dx = x), (dy = y));
++        }
++        if (m < 1 / 0) {
++          let g = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
++          g = ((g % 90) + 90) % 90;
++          H.set(g, (H.get(g) || 0) + 1);
++        }
++      }
++      let gd = 0, gn = 0;
++      for (const [g, n] of H) {
++        let n2 = 0; /*±3°: com poucos pinos as coordenadas arredondadas espalham o ângulo (JE500: 35°, 37°, 39°)*/
++        for (let k = -3; k <= 3; k++) n2 += H.get((g + k + 90) % 90) || 0;
++        n2 > gn && ((gn = n2), (gd = g));
++      }
++      if (gd < 10 || gd > 80 || gn < pts.length * 0.4) continue;
++      /*2R 29/10/2026 (referência do Roger, JE500: o corpo acompanha a fileira de contatos — a fileira fica paralela a um lado do retângulo; não arredondar para 45°)*/
++      const tt = (gd * Math.PI) / 180, c = Math.cos(tt), sn = Math.sin(tt);
++      let a0 = 1 / 0, a1 = -1 / 0, b0 = 1 / 0, b1 = -1 / 0;
++      const add = (x, y) => {
++        const u = x * c + y * sn, v = -x * sn + y * c;
++        a0 = Math.min(a0, u); a1 = Math.max(a1, u); b0 = Math.min(b0, v); b1 = Math.max(b1, v);
++      };
++      for (const q of P.pins) {
++        if (!q || !q.position) continue;
++        const B = q.padBounds;
++        if (B) { add(B.minX, B.minY); add(B.maxX, B.minY); add(B.maxX, B.maxY); add(B.minX, B.maxY); }
++        else add(q.position.x, q.position.y);
++      }
++      if (!isFinite(a0)) continue;
++      const g = 0.15 * 39.37;
++      a0 -= g; a1 += g; b0 -= g; b1 += g;
++      const pt = (u, v) => [u * c - v * sn, u * sn + v * c];
++      P.__r2poly = [pt(a0, b0), pt(a1, b0), pt(a1, b1), pt(a0, b1)];
++      P.__r2gira = 1;
++      P.__r2giraJ = gd;
++      delete P.__r2corpo;
++    } catch (e) {}
++  }
++}
++
++export { R2centro, R2viz, R2tam, R2lado, R2mira, R2raio, R2rEf, R2caixa, R2claro, R2drmosGiro, R2margem, R2pk, R2grande, R2uf, R2kf, R2cap4, R2gira, R2shunt, R2faixa, R2drmos, R2drmos2, R2pads, R2contorno, R2bob4, R2fpc, R2cap3, R2giraJ };
+diff --git a/src/frontend/src/renderer/board-scene.ts b/src/frontend/src/renderer/board-scene.ts
+index 692e49d6..145cadfd 100644
+--- a/src/frontend/src/renderer/board-scene.ts
++++ b/src/frontend/src/renderer/board-scene.ts
+@@ -43,7 +43,7 @@ import { capsuleParams, isOblongRoundPad, capsuleGrowForRadius, type CapsulePara
+ import { defaultLayerColor } from '../store/layer-store';
+ import { themeStore, hexToInt } from '../store/themes';
+ import { r2PadsColoridos, r2Mesa, r2XwOculto } from '../r2/hand-flags';
+-import { R2centro, R2viz, R2caixa, R2claro, R2pk, R2grande, R2kf, R2cap4, R2gira, R2shunt, R2pads, R2contorno, R2bob4 } from '../r2/hand-geom';
++import { R2centro, R2viz, R2caixa, R2claro, R2pk, R2grande, R2kf, R2cap4, R2gira, R2shunt, R2pads, R2contorno, R2bob4, R2cap3, R2giraJ } from '../r2/hand-geom';
+ /* eslint-disable @typescript-eslint/no-explicit-any */
+ const r2win = window as any;
+ 
+@@ -921,7 +921,7 @@ export function buildBoardScene(
+   // is what the user sees as a horizontal row — and that's the run that needs
+   // the label stagger.
+   // 2R 20/10 a 27/10/2026: contorno externo, shunt/cristal/conector, capacitor de 4 terminais, pads físicos, CI girado
+-  R2contorno(board); R2shunt(board); R2cap4(board); R2bob4(board); R2pads(board); R2gira(board);
++  R2contorno(board); R2cap3(board); R2shunt(board); R2cap4(board); R2bob4(board); R2pads(board); R2gira(board); R2giraJ(board);
+   const rot90 = ((Math.round(viewRotationDeg / 90) % 4) + 4) % 4;
+   const axesSwapped = rot90 === 1 || rot90 === 3;
+   // Sign that turns "even → visually above the pin" into a board-space offset.
+-- 
+2.43.0
+

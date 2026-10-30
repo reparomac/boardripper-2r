@@ -1,0 +1,31 @@
+From 19bd78c411def3094112ee6ab15792107d9901d7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 04:51:18 -0300
+Subject: [PATCH 30/31] =?UTF-8?q?r2:=20bot=C3=A3o=20Ghost=20sem=20anima?=
+ =?UTF-8?q?=C3=A7=C3=A3o=20pr=C3=B3pria,=20igual=20aos=20outros?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/components/overlay/slots/SideSwitch.tsx | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/frontend/src/components/overlay/slots/SideSwitch.tsx b/src/frontend/src/components/overlay/slots/SideSwitch.tsx
+index 6d372171..f169bddf 100644
+--- a/src/frontend/src/components/overlay/slots/SideSwitch.tsx
++++ b/src/frontend/src/components/overlay/slots/SideSwitch.tsx
+@@ -56,7 +56,7 @@ export function SideSwitch({ ctx }: { ctx: SlotCtx }) {
+           linha piscam nos dois lados); terceiro: desliga */}
+       <button
+         type="button"
+-        className={`overlay-seg-btn${gm !== 'off' ? ' active' : ''}${gm === 'disco' ? ' disco-active' : ''}`}
++        className={`overlay-seg-btn${gm !== 'off' ? ' active' : ''}`}
+         data-testid="side-ghost"
+         aria-pressed={gm !== 'off'}
+         title={gm === 'off' ? 'Ghost desligado · clique: peças do outro lado na linha marcada aparecem apagadas'
+-- 
+2.43.0
+

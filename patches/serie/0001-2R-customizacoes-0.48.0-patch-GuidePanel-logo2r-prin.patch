@@ -1,7 +1,7 @@
 From d038d8f7e4d64315b39c361192731da044faa31b Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:20:50 -0300
-Subject: [PATCH 01/22] 2R: customizacoes 0.48.0 patch + GuidePanel +
+Subject: [PATCH 01/31] 2R: customizacoes 0.48.0 patch + GuidePanel +
  logo2r-print (base do bundle de 11/10)
 
 ---

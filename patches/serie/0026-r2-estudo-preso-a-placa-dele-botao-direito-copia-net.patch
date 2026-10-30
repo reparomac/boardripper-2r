@@ -1,0 +1,167 @@
+From ef9576959ea2f8cb8468294a668da1ce1d4c4c42 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 03:09:31 -0300
+Subject: [PATCH 26/31] r2: estudo preso a placa dele, botao direito copia
+ net/pino/peca, ponto mais proximo ignora CI grande
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/components/GuideHud.tsx   |  2 +-
+ src/frontend/src/r2/guide-store.ts         | 51 ++++++++++++++++++----
+ src/frontend/src/renderer/BoardRenderer.ts |  9 ++++
+ 3 files changed, 53 insertions(+), 9 deletions(-)
+
+diff --git a/src/frontend/src/components/GuideHud.tsx b/src/frontend/src/components/GuideHud.tsx
+index 0725dc50..7d8bc3b2 100644
+--- a/src/frontend/src/components/GuideHud.tsx
++++ b/src/frontend/src/components/GuideHud.tsx
+@@ -21,7 +21,7 @@ export function GuideHud() {
+   const r = guideStore.current();
+   if (!r) return null;
+   const pt = r.points.length ? r.points[guideStore.pointIdx % r.points.length] : null;
+-  const tab = boardStore.activeTab, sel = tab?.selection;
++  const tab = guideStore.tab() ?? boardStore.activeTab, sel = tab?.selection;   // 2R 29/10: a placa do estudo
+   const sp = tab?.board && sel?.partIndex != null && sel.pinIndex != null && sel.pinIndex >= 0 ? tab.board.parts[sel.partIndex] : null;
+   const selLabel = sp ? `${sp.name}.${sp.pins[sel!.pinIndex!].number || sp.pins[sel!.pinIndex!].name}` : '';
+   const ball = pt && tab?.board ? bgaBall(tab.board.parts[pt.partIndex], pt.pinIndex) : null;
+diff --git a/src/frontend/src/r2/guide-store.ts b/src/frontend/src/r2/guide-store.ts
+index 873d2ff9..35c557fd 100644
+--- a/src/frontend/src/r2/guide-store.ts
++++ b/src/frontend/src/r2/guide-store.ts
+@@ -188,9 +188,24 @@ export function resolve(board: BoardData, step: Step): Resolved {
+   return { step, nets, missing, points: points.map(({ score: _s, ...r }) => r) };
+ }
+ 
++/* 2R 29/10/2026 (Roger: «posso usar o estudo e o ripper ao mesmo tempo, sem fechar ou sair do ponto da análise, assim
++   posso abrir duas placas ao mesmo tempo e comparar o circuito»): o ponto a ponto fica PRESO à aba da placa em que foi
++   ligado. Abrir/olhar outra placa não muda o passo nem mexe na câmera dela; ao voltar para a aba do estudo, ele
++   recentraliza no ponto em que estava. */
++let gTab: number | null = null;
++function guideTab() {
++  const t = gTab != null ? boardStore.tabs.find(x => x.id === gTab && x.board) : undefined;
++  if (t) return t;
++  gTab = null;
++  const at = boardStore.activeTab;
++  if (on && active && at?.board && matchesBoard(active, at.fileName || '')) { gTab = boardStore.activeTabId; return at; }
++  return boardStore.activeTab?.board ? boardStore.activeTab : (active && on ? boardStore.tabs.find(x => x.board) ?? null : null);
++}
++function naAbaDoEstudo(): boolean { return gTab == null || boardStore.activeTabId === gTab; }
++
+ function current(): Resolved | null {
+-  // 2R: com o ponto a ponto ligado, vale a placa aberta mesmo que a aba ativa seja outra (PDF)
+-  const b = boardStore.activeTab?.board || (active && on ? (boardStore.tabs.find(t => t.board) || { board: null }).board : null);
++  // 2R: com o ponto a ponto ligado, vale a placa do estudo mesmo que a aba ativa seja outra (PDF ou outra placa)
++  const b = guideTab()?.board ?? null;
+   if (!active || !b || !active.steps[pos]) return null;
+   return resolve(b, active.steps[pos]);
+ }
+@@ -240,7 +255,7 @@ function r2Recentra(t: Point) {
+    anterior» — entre os pontos medíveis da net, vai para o mais perto do ponto do passo anterior; ponto fixado à mão vale */
+ function r2PtAtual(): { x: number; y: number; side?: string } | null {
+   try {
+-    const c = current(), b = boardStore.activeTab?.board;
++    const c = current(), b = guideTab()?.board;
+     const t = c && c.points[pointIdx % Math.max(1, c.points.length)];
+     const p = t && b && b.parts[t.partIndex]?.pins[t.pinIndex];
+     return p && b ? { x: p.position.x, y: p.position.y, side: b.parts[t!.partIndex].side } : null;
+@@ -248,16 +263,25 @@ function r2PtAtual(): { x: number; y: number; side?: string } | null {
+ }
+ function r2Perto(p: { x: number; y: number; side?: string } | null | undefined): number {
+   try {
+-    if (!p || r2w.__r2PertoOff) return 0;
+-    const c = current(), b = boardStore.activeTab?.board;
++    if (r2w.__r2PertoOff) return 0;
++    const c = current(), b = guideTab()?.board;
+     if (!c || !b || !c.points.length || c.points[0].fixed) return 0;
+     let a = c.points.map((t, k) => ({ t, k })).filter(o => o.t.kind !== 'outro');
+     if (!a.length) a = c.points.map((t, k) => ({ t, k }));
++    /* 2R 29/10/2026 (Roger: «desconsiderar quando o pad mais próximo estiver dentro de um BGA — SSD, CPU, T2, GPU,
++       PCH, PMU, SPMU, CI de charger etc.»): pino de CI grande (16 pinos ou mais) só entra se a net não tiver outro
++       ponto medível. Mudar o limite: window.__r2BgaPinos = N (0 desliga) */
++    const lim = Number((r2w as unknown as { __r2BgaPinos?: number }).__r2BgaPinos ?? 16);
++    if (lim > 0) {
++      const fora = a.filter(o => (b.parts[o.t.partIndex]?.pins.length ?? 0) < lim);
++      if (fora.length) a = fora;
++    }
++    if (!p) return a[0].k;
+     /* 2R 29/10/2026 (Roger: «ir para o ponto mais próximo e de preferência do mesmo lado da placa… entre dois pontos
+        próximos sendo um de cada lado, dar preferência para um outro ponto do mesmo lado»): ponto do OUTRO lado só
+        ganha se estiver 3× mais perto (distância ao quadrado × 9). Sem ponto anterior com lado, vale o lado que está
+        na tela. Desligar: window.__r2LadoPeso = 1 */
+-    const lado = p.side ?? (() => { const t = boardStore.activeTab; return t && !t.butterfly && t.showTop !== t.showBottom ? (t.showTop ? 'top' : 'bottom') : undefined; })();
++    const lado = p.side ?? (() => { const t = guideTab(); return t && !t.butterfly && t.showTop !== t.showBottom ? (t.showTop ? 'top' : 'bottom') : undefined; })();
+     const k2 = Math.pow(Number((r2w as unknown as { __r2LadoPeso?: number }).__r2LadoPeso) || 3, 2);
+     let m = 0, d = Infinity;
+     for (const o of a) {
+@@ -289,6 +313,7 @@ r2w.__r2LadoPeca = (w: string) => r2LadoPeca(w);
+ function show() {
+   const r = current();
+   if (!r) { emit(); return; }
++  if (!naAbaDoEstudo()) { emit(); return; }      // 2R 29/10: outra placa na frente — não mexe na câmera dela
+   const tab = boardStore.activeTab;
+   const pt = r.points[pointIdx % Math.max(1, r.points.length)];
+   if (pt && tab?.board) {
+@@ -338,6 +363,8 @@ function followSchematic(r: Resolved) {
+ r2w.__2rBoardGet = () => boardStore;
+ export const guideStore = {
+   subscribe(f: () => void) { subs.add(f); return () => { subs.delete(f); }; },
++  /** 2R 29/10: aba da placa do estudo (pode não ser a ativa) */
++  tab() { return guideTab(); },
+   get rev() { return rev; },
+   get list() { return list; },
+   get active() { return active; },
+@@ -361,7 +388,7 @@ export const guideStore = {
+     return list.filter(r => matchesBoard(r, f));
+   },
+   open(id: string) { active = list.find(x => x.id === id) ?? null; pos = 0; pointIdx = 0; emit(); },
+-  start() { if (!active) return; on = true; applySavedZoom = true; try { localStorage.setItem(ON_KEY, '1'); } catch { /* */ } show(); },
++  start() { if (!active) return; gTab = boardStore.activeTab?.board ? boardStore.activeTabId : gTab; on = true; applySavedZoom = true; try { localStorage.setItem(ON_KEY, '1'); } catch { /* */ } if (pointIdx === 0) pointIdx = r2Perto(null); show(); },
+   stop() {
+     try { const v = r2w.__2rVP, z = v && Math.abs(v.scale.x); if (z && z > 0) localStorage.setItem('2r-seq-zoom', String(z)); } catch { /* */ }
+     on = false;
+@@ -629,7 +656,7 @@ function replaceActive(steps: Step[]) {
+ }
+ 
+ function onKey(e: KeyboardEvent) {
+-  if (!on || !active) return;
++  if (!on || !active || !naAbaDoEstudo()) return;
+   const t = e.target as HTMLElement | null;
+   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+   if (e.metaKey || e.ctrlKey || e.altKey) return;
+@@ -646,4 +673,12 @@ export function installGuide(): void {
+   if (!IS_2R || !beta('teleguiado')) return;
+   window.addEventListener('keydown', onKey, true);
+   boardStore.subscribe(() => { void pullSeq(); });
++  // 2R 29/10: voltou para a aba do estudo → recentraliza no ponto em que estava
++  let ultAba: number | null = boardStore.activeTabId;
++  boardStore.subscribe(() => {
++    const a = boardStore.activeTabId;
++    if (a === ultAba) return;
++    ultAba = a;
++    if (on && active && gTab != null && a === gTab) setTimeout(() => { try { show(); } catch { /* */ } }, 80);
++  });
+ }
+diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
+index 8364839e..e335128e 100644
+--- a/src/frontend/src/renderer/BoardRenderer.ts
++++ b/src/frontend/src/renderer/BoardRenderer.ts
+@@ -2280,6 +2280,15 @@ export class BoardRenderer {
+           if (P) {
+             try { boardStore.selectPart(H.partIndex); } catch { /* */ }
+             this.triggerFollowPdf(P, true);
++            /* 2R 29/10/2026 (Roger: «ao clicar com o botão direito em cima de um pad, copiar o nome da linha ou alguma
++               outra informação»): além de mostrar no PDF, abre ao lado do cursor um cartãozinho para copiar a net, o
++               pino, a peça (desenhado pelo index.html: window.__r2CopiaChip) */
++            try {
++              const pin = H.pinIndex != null && H.pinIndex >= 0 ? P.pins[H.pinIndex] : undefined;
++              const chip = (r2w as unknown as { __r2CopiaChip?: (o: Record<string, string>, x: number, y: number) => void }).__r2CopiaChip;
++              if (chip) chip({ peca: P.name, pino: pin ? String(pin.number || pin.name || '') : '', net: pin ? String(pin.net || '') : '',
++                               lado: String(P.side || '') }, e.clientX, e.clientY);
++            } catch { /* */ }
+             return;
+           }
+         }
+-- 
+2.43.0
+

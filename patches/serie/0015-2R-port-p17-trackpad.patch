@@ -1,7 +1,7 @@
 From 48f69913a18b2211044be069d747d8fb827798ef Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:39:12 -0300
-Subject: [PATCH 15/22] 2R port p17 trackpad
+Subject: [PATCH 15/31] 2R port p17 trackpad
 
 ---
  src/frontend/src/components/TrackpadPrefs2R.tsx | 17 +++++++++--------

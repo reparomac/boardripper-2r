@@ -1,0 +1,99 @@
+From d79a4478b4c877cb7a9d3e4873bc3ce58e1b6177 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 04:54:22 -0300
+Subject: [PATCH 31/31] r2: Ghost mostra todos os componentes do outro lado,
+ transparentes com contorno vermelho neon
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/renderer/BoardRenderer.ts | 51 ++++++++++++++++++++--
+ 1 file changed, 47 insertions(+), 4 deletions(-)
+
+diff --git a/src/frontend/src/renderer/BoardRenderer.ts b/src/frontend/src/renderer/BoardRenderer.ts
+index e335128e..c6442842 100644
+--- a/src/frontend/src/renderer/BoardRenderer.ts
++++ b/src/frontend/src/renderer/BoardRenderer.ts
+@@ -3062,7 +3062,7 @@ export class BoardRenderer {
+         // zoom-invariant, so forcing netLinesDirty here just rebuilt identical
+         // segments. Genuine changes set netLinesDirty at their own sites.
+         this.renderNetLines();
+-        if (this.crossSideGhostParts.size > 0) this.renderCrossSideGhosts();
++        if (this.crossSideGhostParts.size > 0 || boardStore.showGhosts) this.renderCrossSideGhosts();
+       }
+       this.needsRender = true;
+     }, 32);
+@@ -4085,7 +4085,7 @@ export class BoardRenderer {
+         if (rotated || flipped || mirrored) {
+           this.netLinesDirty = true;
+           this.renderNetLines();
+-          if (this.crossSideGhostParts.size > 0) this.renderCrossSideGhosts();
++          if (this.crossSideGhostParts.size > 0 || boardStore.showGhosts) this.renderCrossSideGhosts();
+         }
+ 
+         // A 0/180 ↔ 90/270 rotation transposes board vs screen axes, so the
+@@ -7212,9 +7212,12 @@ export class BoardRenderer {
+    *  animates `alpha = ghostAlpha`; the outline layer bakes at 1 and animates
+    *  `alpha = outlineAlpha`. Two layers because one Graphics has one alpha. */
+   private renderCrossSideGhosts() {
+-    // 2R 18/10/2026: sem fantasmas do outro lado da placa
++    // 2R 18/10/2026: sem os fantasmas originais (só da linha marcada, piscando em azul).
++    // 2R 30/10/2026 (Roger: «ghost mantém na cor vermelha, todos os componentes do outro lado da placa aparecem em
++    // transparência com a borda em vermelho neon»): com o botão Ghost ligado, TODOS os componentes do lado escondido
++    // aparecem transparentes, contorno vermelho neon, parados (sem piscar).
+     if (R2_SEM_FANTASMAS) {
+-      try { this.crossSideGhostGfx.clear(); this.crossSideGhostOutlineGfx.clear(); } catch { /* */ }
++      this.r2GhostOutroLado();
+       return;
+     }
+     if (this.crossSideGhostParts.size === 0 || !this.board) {
+@@ -7238,6 +7241,46 @@ export class BoardRenderer {
+     this.needsRender = true;
+   }
+ 
++  private r2GhostOutroLado() {
++    const on = !!this.board && boardStore.ghostMode !== 'off' && !boardStore.butterfly;
++    if (!on) {
++      if (this.crossSideGhostBakeSig !== '') {
++        try { this.crossSideGhostGfx.clear(); this.crossSideGhostOutlineGfx.clear(); } catch { /* */ }
++        this.crossSideGhostBakeSig = '';
++        this.needsRender = true;
++      }
++      return;
++    }
++    const s = renderSettingsStore.settings;
++    const b = this.board!;
++    const sig = `r2|${b.parts.length}|${boardStore.showTop}|${boardStore.showBottom}|${s.selectionWidth}|${s.pinSizeScale}`
++      + `|${this.activeScene ? 1 : 0}|${b.parts[0]?.name ?? ''}`;
++    if (sig === this.crossSideGhostBakeSig) return;
++    const fill = this.crossSideGhostGfx;
++    const outline = this.crossSideGhostOutlineGfx;
++    fill.clear();
++    outline.clear();
++    const NEON = 0xff1a3c;
++    const w = Math.max(1, s.selectionWidth * 0.8);
++    for (let i = 0; i < b.parts.length; i++) {
++      const part = b.parts[i];
++      if (!part || part.hidden || this.isPartVisible(part) || this.isTypeHidden(part.name)) continue;
++      drawPartOutline(fill, part, s, 0);
++      fill.fill({ color: NEON, alpha: 0.07 });
++      drawPartOutline(outline, part, s, 0);
++      outline.stroke({ width: w, color: NEON, alpha: 0.95 });
++      for (const pin of part.pins) {
++        const clamp = this.activeScene?.pinRadiusClamp.get(i) ?? Infinity;
++        drawPinShape(fill, pin, Math.min(computePinRadius(s, pin.radius), clamp));
++      }
++      if (part.pins.length > 0) fill.fill({ color: NEON, alpha: 0.18 });
++    }
++    fill.alpha = 1;
++    outline.alpha = 1;
++    this.crossSideGhostBakeSig = sig;
++    this.needsRender = true;
++  }
++
+   private bakeCrossSideGhosts(sig: string) {
+     const fill = this.crossSideGhostGfx;
+     const outline = this.crossSideGhostOutlineGfx;
+-- 
+2.43.0
+

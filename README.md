@@ -37,6 +37,9 @@ and to give credit and code back to the community.
   outside the board outline
 - Diode cards on pads, name + value inside the component
 - 2R themes, OBD (OpenBoardData) refresh button with progress/result animation, no white flash on load
+- Donor board search (part code, position or net, online/local library, up to 20 boards); right-click a part or net to search
+- Ghost button next to TOP / BOTTOM / BUTTERFLY: every component on the hidden side shown transparent with a neon red
+  outline (second click: Disco)
 - Extra EN/ES translations, language switch without restart
 - Server bound to localhost only
 
