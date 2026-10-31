@@ -889,15 +889,16 @@ index 00000000..57d88cbe
 +}
 diff --git a/src/frontend/src/components/GuideHud.tsx b/src/frontend/src/components/GuideHud.tsx
 new file mode 100644
-index 00000000..7d8bc3b2
+index 00000000..fac67435
 --- /dev/null
 +++ b/src/frontend/src/components/GuideHud.tsx
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,79 @@
 +import { useSyncExternalStore } from 'react';
 +import { guideStore } from '../r2/guide-store';
 +import { useBoardStore } from '../hooks/useBoardStore';
 +import { boardStore } from '../store/board-store';
 +import { bgaBall } from '../r2/bga';
++import { meterStore } from '../r2/meter-store';
 +import { jsx as r2jsx, jsxs as r2jsxs, Fragment as R2Frag } from 'react/jsx-runtime';
 +const R2D = { jsx: r2jsx, jsxs: r2jsxs, Fragment: R2Frag };
 +type GInfo = { gn: number; gk: number; gm: number; nome?: string; cor: string; novo?: boolean };
@@ -910,6 +911,7 @@ index 00000000..7d8bc3b2
 +/** 2R Tools: faixa do Teleguiado em cima da placa — passo atual, net, ponto indicado e setas. */
 +export function GuideHud() {
 +  useSyncExternalStore(guideStore.subscribe, () => guideStore.rev);
++  useSyncExternalStore(meterStore.subscribe, () => meterStore.rev);
 +  useBoardStore();
 +  const a = guideStore.active;
 +  if (!guideStore.on || !a) return null;
@@ -948,12 +950,22 @@ index 00000000..7d8bc3b2
 +          })()}
 +        </div>
 +        {(r.step.v || r.step.d || r.step.r) && <div className="r2gd-hud-vals">
-+          {r.step.v && <span>Tensão <b>{r.step.v}</b></span>}
-+          {r.step.d && <span>Diodo <b>{r.step.d}</b></span>}
-+          {r.step.r && <span>Resist. <b>{r.step.r}</b></span>}
++          {r.step.v && <span>Tensão <b>{r.step.v}</b>{r.step.vs && <i className="r2gd-hud-src"> {r.step.vs}</i>}</span>}
++          {r.step.d && <span>Diodo <b>{r.step.d}</b>{r.step.ds && <i className="r2gd-hud-src"> {r.step.ds}</i>}</span>}
++          {r.step.r && <span>Resist. <b>{r.step.r}</b>{r.step.rs && <i className="r2gd-hud-src"> {r.step.rs}</i>}</span>}
 +          {r2h.__r2rp && r2h.__r2rp.on && (r.step.iv || r.step.id || r.step.ir) && <span>Esperado <b>{[r.step.iv, r.step.id, r.step.ir].filter(Boolean).join(' | ')}</b></span>}
 +          {r2h.__r2rp && r2h.__r2rp.on && r.step.valAt && <span>medido em <b>{new Date(r.step.valAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</b>{r.step.valBy ? ' · ' + r.step.valBy : ''}</span>}
 +        </div>}
++        {(() => {
++          // 2R 30/10/2026 (Roger: «mostrar no painel qual instrumento ele tá fazendo a captura»)
++          const L = meterStore.liveBy, now = Date.now();
++          const on = Object.values(L).filter(x => x && now - x.t < 4000);
++          if (!on.length) return null;
++          const M: Record<string, string> = { tensao: 'tensão', resistencia: 'resistência', diodo: 'diodo' };
++          return <div className="r2gd-hud-cap">{on.map(x => (
++            <span key={x.source} className={x.aceita ? 'on' : 'off'} title={x.aceita ? 'Este aparelho está gravando neste modo' : 'Neste modo a gravação é pelo outro aparelho'}>
++              {x.aceita ? '● capturando: ' : '○ '}<b>{x.source}</b> · {M[x.mode] || x.mode}</span>))}</div>;
++        })()}
 +        {canFix && <button className="r2gd-hud-fix" title="Usar o pino selecionado como ponto deste passo" onClick={() => guideStore.pinSelectedAsPoint()}>◆ usar {selLabel}</button>}
 +      </div>
 +      <button className="r2gd-hud-arrow" title="Próximo passo (→)" onClick={() => guideStore.next()} disabled={guideStore.pos >= a.steps.length - 1}>›</button>
@@ -2721,7 +2733,7 @@ index a70d80a2..d6003c73 100644
        if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
          if (pdfStore.matches.length > 0) {
 diff --git a/src/frontend/src/index.css b/src/frontend/src/index.css
-index 5498de41..988651ba 100644
+index 5498de41..bcf3ae0b 100644
 --- a/src/frontend/src/index.css
 +++ b/src/frontend/src/index.css
 @@ -1142,7 +1142,7 @@ body {
@@ -2773,7 +2785,7 @@ index 5498de41..988651ba 100644
    pointer-events: none;
    z-index: 5;
    box-sizing: border-box;
-@@ -10018,3 +10033,1007 @@ body {
+@@ -10018,3 +10033,1012 @@ body {
  }
  .settings-fine-tune > summary:hover { color: var(--text-primary); }
  .settings-fine-tune[open] > summary { margin-bottom: 4px; }
@@ -3100,6 +3112,11 @@ index 5498de41..988651ba 100644
 +.r2gd-cell.has { color: var(--r2-strong); font-weight: 700; }
 +.r2gd-hud-vals { display: flex; justify-content: center; gap: 14px; font-size: 12px; color: var(--r2-mute); margin-top: 3px; }
 +.r2gd-hud-vals b { color: var(--r2-strong); font-family: ui-monospace, Menlo, monospace; }
++/* 2R 30/10/2026: aparelho que gravou cada valor e quem está capturando agora */
++.r2gd-hud-src { font-style: normal; font-size: 10.5px; color: #E0A040; margin-left: 4px; }
++.r2gd-hud-cap { display: flex; justify-content: center; gap: 12px; font-size: 11.5px; margin-top: 4px; }
++.r2gd-hud-cap .on { color: #5FD08A; } .r2gd-hud-cap .on b { color: var(--r2-strong); }
++.r2gd-hud-cap .off { color: var(--r2-mute); opacity: .7; }
 +.r2gd-extra { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 4px; cursor: default; }
 +.r2gd-step .r2gd-nets { word-break: break-word; overflow-wrap: anywhere; }
 +/* menus de texto dentro da barra de ícones (uma barra só) */
@@ -6343,10 +6360,10 @@ index 00000000..b2b15976
 +}
 diff --git a/src/frontend/src/r2/guide-store.ts b/src/frontend/src/r2/guide-store.ts
 new file mode 100644
-index 00000000..35c557fd
+index 00000000..c2ec0334
 --- /dev/null
 +++ b/src/frontend/src/r2/guide-store.ts
-@@ -0,0 +1,684 @@
+@@ -0,0 +1,685 @@
 +/**
 + * 2R Tools: Teleguiado — sequência de start indicada na placa (Roger, 10/10/2026):
 + * «deixar o boardripper com a função teleguiado… uma sequência de start e já
@@ -6370,6 +6387,7 @@ index 00000000..35c557fd
 +  /** valores do passo (Roger: «add mais 3 colunas, como tensão, modo diodo e resistência… editável durante a
 +   *  leitura dos pontos, pelos instrumentos ou manualmente») — texto como o técnico escreve */
 +  v?: string; d?: string; r?: string; /** quem/quando preencheu pelo instrumento */ valBy?: string; valAt?: number;
++  /** 2R 30/10/2026: aparelho que gravou cada valor (Rigol DM858E / i2C C09 / manual) */ vs?: string; ds?: string; rs?: string;
 +  /** Ponto a ponto (Roger, 11/10/2026): nome do teste (renomeável), valor certo (ideal) e a estrela
 +   *  do «valor certo depois do reparo» (vira referência). */
 +  name?: string; iv?: string; id?: string; ir?: string; star?: boolean;
@@ -6785,7 +6803,7 @@ index 00000000..35c557fd
 +    const steps = active.steps.map((st, k) => (k === i ? { ...st, ...patch } : st));
 +    replaceActive(steps);
 +    if (r2w.__r2Anot) r2w.__r2Anot(active, i, patch);
-+    const onlyValues = Object.keys(patch).every(k => ['v', 'd', 'r', 'valBy', 'valAt', 'note'].includes(k));
++    const onlyValues = Object.keys(patch).every(k => ['v', 'd', 'r', 'valBy', 'valAt', 'note', 'vs', 'ds', 'rs'].includes(k));
 +    if (i === pos && !onlyValues) { pointIdx = 0; if (on) show(); }
 +  },
 +  /** Fixa o pino selecionado na placa como o ponto do passo atual. */
@@ -6849,13 +6867,13 @@ index 00000000..35c557fd
 +    return label;
 +  },
 +  /** Leitura do instrumento com a sequência ligada: preenche a coluna do modo no passo atual. */
-+  recordValue(mode: 'tensao' | 'diodo' | 'resistencia', value: number, unit: string, by = ''): boolean {
++  recordValue(mode: 'tensao' | 'diodo' | 'resistencia', value: number, unit: string, by = '', src = ''): boolean {
 +    if (!on || !active || !active.steps[pos] || (r2w.__r2rp && r2w.__r2rp.on)) return false;
 +    const key = mode === 'tensao' ? 'v' : mode === 'diodo' ? 'd' : 'r';
 +    // 2R 26/10/2026: valores no padrão do SDS (vírgula, V com 2 casas) — window.__r2Num vem do index.html
 +    const txt = r2w.__r2Num ? r2w.__r2Num(key, String(value)) : mode === 'resistencia' ? fmtOhm(value) : value.toFixed(3);
 +    void unit;
-+    guideStore.editStep(pos, { [key]: txt as string, valBy: by, valAt: Date.now() } as Partial<Step>);
++    guideStore.editStep(pos, { [key]: txt as string, [key + 's']: src || undefined, valBy: by, valAt: Date.now() } as Partial<Step>);
 +    return true;
 +  },
 +  // ── programar os pontos a medir (Roger, 11/10/2026): clicar/buscar na placa e no PDF,
@@ -9343,10 +9361,10 @@ index 00000000..637285b3
 +}
 diff --git a/src/frontend/src/r2/meter-store.ts b/src/frontend/src/r2/meter-store.ts
 new file mode 100644
-index 00000000..d3f00f9d
+index 00000000..fe5f7d9d
 --- /dev/null
 +++ b/src/frontend/src/r2/meter-store.ts
-@@ -0,0 +1,383 @@
+@@ -0,0 +1,452 @@
 +/**
 + * 2R Tools: medições do multímetro (Rigol DM858E / i2C C09) ligadas ao pino
 + * selecionado na placa (Roger, 10/10/2026). A leitura estável entra na lista
@@ -9392,7 +9410,8 @@ index 00000000..d3f00f9d
 +  soundSave: boolean;
 +}
 +const CAP_KEY = '2r-medicoes-captura';
-+const DEFAULT_CAP: CapturePrefs = { auto: true, holdMs: 1000, key: 'Enter', sound: true, soundSave: true };
++// 2R 31/10/2026 (Roger): captura com a leitura firme por 2 s (antes 1 s)
++const DEFAULT_CAP: CapturePrefs = { auto: true, holdMs: 2000, key: 'Enter', sound: true, soundSave: true };
 +
 +const KEY = '2r-medicoes';
 +const TOL_KEY = '2r-medicoes-tol';
@@ -9493,6 +9512,8 @@ index 00000000..d3f00f9d
 +  get rev() { return rev; },
 +  get list() { return list; },
 +  get live() { return live; },
++  /** 2R 30/10/2026: última leitura de cada aparelho (rigol / i2c), com o modo e se ele grava nesse modo. */
++  get liveBy() { return liveBy; },
 +  get status() { return status; },
 +  get via() { return via; },
 +  get redo() { return redo; },
@@ -9554,12 +9575,24 @@ index 00000000..d3f00f9d
 +  /** Captura manual (botão ou tecla): grava a leitura que está na tela agora. */
 +  captureNow() {
 +    if (live?.value == null) { if (cap.soundSave) playNotSaved(); boardStore.addToast('Sem leitura agora (ponta aberta).', 'info'); return; }
-+    capture({ value: live.value, unit: live.unit, source: sourceName() });
++    capture({ value: live.value, unit: live.unit, source: liveSource || sourceName(), mode: liveMode ?? undefined });
 +  },
 +  testSound(kind: 'ok' | 'warn' | 'bad' | 'saved' | 'notsaved') {
 +    ({ ok: playOk, warn: playWarn, bad: playBad, saved: playSaved, notsaved: playNotSaved })[kind]();
 +  },
 +};
++
++/** 2R 30/10/2026: o modo vem do campo «mode» do aparelho quando existe (o i2C C09 manda unit «V» também no
++ *  diodo — por isso as leituras de diodo dele entravam como tensão). */
++export function modeFrom(unit: string, mode?: string): Mode {
++  const m = (mode || '').toLowerCase();
++  // 2R 31/10/2026: «outro» = o visor do Cockpit está num modo que a ficha não usa (capacitor, frequência…): não grava
++  if (m === 'outro') return 'outro' as Mode;
++  if (m.includes('diod')) return 'diodo';
++  if (m.includes('ohm') || m.includes('res') || m.includes('Ω')) return 'resistencia';
++  if (m.includes('volt') || m.includes('tens') || m.includes('dcv') || m.includes('acv')) return 'tensao';
++  return modeOf(unit);
++}
 +
 +export function modeOf(unit: string): Mode {
 +  const u = (unit || '').toUpperCase();
@@ -9619,17 +9652,19 @@ index 00000000..d3f00f9d
 +  (m.status === 'ok' ? playOk : m.status === 'fora' ? (lastSeverity >= 2 ? playBad : playWarn) : playTick)();
 +}
 +
-+function capture(d: { value: number; unit: string; source: string }) {
++function capture(d: { value: number; unit: string; source: string; mode?: Mode }) {
 +  const tab = boardStore.activeTab;
 +  const sel = tab?.selection;
 +  const part = tab?.board && sel?.partIndex != null ? tab.board.parts[sel.partIndex] : null;
 +  const pin = part && sel?.pinIndex != null && sel.pinIndex >= 0 ? part.pins[sel.pinIndex] : null;
 +  if (!tab || !part || !pin) {
 +    if (cap.soundSave) playNotSaved();
-+    boardStore.addToast('Leitura ' + d.value.toFixed(3) + ' recebida — selecione o pino na placa para guardar.', 'info');
++    // 2R 31/10/2026 (Roger): sem os cards azuis das leituras (a ficha já mostra); __2rMeterToasts liga de volta
++    if ((window as unknown as Record<string, unknown>).__2rMeterToasts)
++      boardStore.addToast('Leitura ' + d.value.toFixed(3) + ' recebida — selecione o pino na placa para guardar.', 'info');
 +    return;
 +  }
-+  const mode = modeOf(d.unit);
++  const mode = d.mode ?? modeOf(d.unit);
 +  const obd = obdNetLookup(obdBoardNumberFor(tab) ?? undefined, pin.net)[0];
 +  const expStr = (mode === 'diodo' ? obd?.diode : mode === 'tensao' ? obd?.voltage : obd?.resistance) ?? '';
 +  let m: Medicao = judge({ t: Date.now(), board: tab.fileName, part: part.name, pin: pin.number || pin.name, net: pin.net || '',
@@ -9652,39 +9687,90 @@ index 00000000..d3f00f9d
 +  if (cap.sound && !announced) { verdictSound(d.value, d.unit); delay = 420; }
 +  announced = true;
 +  if (cap.soundSave) window.setTimeout(playSaved, delay);
-+  boardStore.addToast(`${here}${m.via ? ` (medido em ${m.via})` : ''} (${m.net || 'sem net'}): ${d.value.toFixed(3)}`
++  if ((window as unknown as Record<string, unknown>).__2rMeterToasts) boardStore.addToast(`${here}${m.via ? ` (medido em ${m.via})` : ''} (${m.net || 'sem net'}): ${d.value.toFixed(3)}`
 +    + (m.status === 'ok' ? ' — OK' : m.status === 'fora' ? ` — fora do esperado (${expStr})` : ''), m.status === 'fora' ? 'error' : 'info');
 +  // Sequência de start ligada: a leitura também vai para a coluna do passo atual
-+  if (guideStore.on && guideStore.recordValue(mode, d.value, d.unit, who)) return;
++  if (guideStore.on && guideStore.recordValue(mode, d.value, d.unit, who, d.source)) return;
 +  if (seqPrefs.auto) window.setTimeout(() => stepPin(1), 250);   // próximo pino da sequência
 +}
 +
 +// ── captura automática: leitura parada pelo tempo escolhido, uma por toque ──
-+let since = 0, ref: number | null = null, armed = true, lastCaptured: number | null = null;
-+/** O som da leitura já tocou neste toque da ponta. */
++// 2R 30/10/2026 (Roger: «a leitura do multímetro está errada… tensão ou resistência a captura tem que ser pelo Rigol
++// DM858E; modo diodo a leitura é feita pelo i2C C09»): o SDS manda as leituras dos DOIS aparelhos pela mesma porta,
++// misturadas. Agora cada aparelho tem o seu estado de estabilidade e só vale: Rigol em tensão/resistência, C09 em diodo.
++interface LiveIn { value: number | null; unit: string; text: string; kind?: string; mode?: string; visor?: unknown }
++interface Est { since: number; ref: number | null; armed: boolean; lastCaptured: number | null; announced: boolean; run?: unknown }
++/** 2R 31/10/2026: regra de leitura estável da página do SDS (window.__2rEstavel, index.html) */
++type Estavel = (e: Est, v: number, t: number, mode: Mode, hold: number) => { reinicio?: boolean; bip?: boolean; pronto?: boolean; valor?: number };
++const est: Record<string, Est> = {};
++const liveBy: Record<string, { value: number | null; unit: string; text: string; mode: Mode; vz: unknown; source: string; t: number; aceita: boolean }> = {};
++let liveSource = '';
++let liveMode: Mode | null = null;
++/** O som da leitura já tocou neste toque da ponta (aparelho da última leitura aceita). */
 +let announced = false;
-+function onLive(d: { value: number | null; unit: string; text: string }) {
-+  live = d; emit();
++function nomeAparelho(kind: string): string {
++  return kind === 'i2c' ? 'i2C C09' : kind === 'rigol' ? 'Rigol DM858E' : sourceName();
++}
++function aceita(kind: string, mode: Mode): boolean {
++  // 2R 31/10/2026 (Roger: «desativar o instrumento que não está usando»): aparelho desativado na ficha não grava
++  const off = (window as unknown as { __2rMeterOff?: Record<string, number> }).__2rMeterOff;
++  if (off && off[kind || 'm']) return false;
++  if (kind === 'i2c') return mode === 'diodo';
++  if (kind === 'rigol') return mode === 'tensao' || mode === 'resistencia';
++  return true;
++}
++function publicaLive() {
++  const w = window as unknown as Record<string, unknown>;
++  w.__2rMeterLiveAll = liveBy;
++  try { window.dispatchEvent(new CustomEvent('r2-meter-live', { detail: liveBy })); } catch { /* */ }
++}
++function onLive(d: LiveIn) {
++  const kind = d.kind || '';
++  const mode = modeFrom(d.unit, d.mode);
++  const ok = aceita(kind, mode);
++  liveBy[kind || 'm'] = { value: d.value, unit: d.unit, text: d.text, mode, vz: d.visor || null, source: nomeAparelho(kind), t: Date.now(), aceita: ok };
++  publicaLive();
++  if (!ok) { emit(); return; }                     // aparelho no modo que não é dele: mostra, não grava
++  live = { value: d.value, unit: d.unit, text: d.text }; liveSource = nomeAparelho(kind); liveMode = mode; emit();
++  const e = est[kind] || (est[kind] = { since: 0, ref: null, armed: true, lastCaptured: null, announced: false });
 +  const v = d.value;
 +  const now = Date.now();
-+  if (v == null) { armed = true; ref = null; announced = false; return; }          // ponta aberta: pronto para o próximo ponto
-+  // ponta tirada em tensão/resistência (lê ~0) ou mudou muito: libera de novo
-+  if (!armed && lastCaptured !== null) {
-+    const moved = Math.abs(v - lastCaptured) > Math.max(0.01, Math.abs(lastCaptured) * 0.1);
-+    if (moved) { armed = true; announced = false; }
++  if (v == null) { e.armed = true; e.ref = null; e.run = null; e.announced = false; announced = false; return; }   // ponta aberta: pronto para o próximo ponto
++  // 2R 31/10/2026 (Roger: «os multímetros ficam oscilando… só levar em conta quando estabilizar»): a janela inteira
++  // tem que ficar numa faixa estreita (regra em window.__2rEstavel, no index.html do SDS)
++  const est2 = (window as unknown as { __2rEstavel?: Estavel }).__2rEstavel;
++  const E = est2 ? est2(e, v, now, mode, cap.holdMs) : null;
++  if (E) {
++    if (E.reinicio) { e.announced = false; announced = false; return; }
++    if (!e.announced && E.bip) { e.announced = true; if (cap.sound) verdictSound(v, d.unit); }
++    announced = e.announced;
++    if (cap.auto && e.armed && E.pronto) {
++      e.armed = false; e.lastCaptured = E.valor ?? v; e.run = null;
++      capture({ value: E.valor ?? v, unit: d.unit, source: nomeAparelho(kind), mode });
++    }
++    return;
++  }
++  if (!e.armed && e.lastCaptured !== null) {
++    const moved = Math.abs(v - e.lastCaptured) > Math.max(0.01, Math.abs(e.lastCaptured) * 0.1);
++    if (moved) { e.armed = true; e.announced = false; }
 +  }
 +  const band = (r: number) => Math.max(0.003, Math.abs(r) * 0.01);
-+  if (ref === null || Math.abs(v - ref) > band(ref)) { ref = v; since = now; announced = false; return; }
-+  // som da leitura assim que firma (antes de gravar) — também ajuda na captura manual
-+  if (!announced && now - since >= Math.min(350, cap.holdMs / 2)) {
-+    announced = true;
++  if (e.ref === null || Math.abs(v - e.ref) > band(e.ref)) { e.ref = v; e.since = now; e.announced = false; announced = false; return; }
++  if (!e.announced && now - e.since >= Math.min(350, cap.holdMs / 2)) {
++    e.announced = true;
 +    if (cap.sound) verdictSound(v, d.unit);
 +  }
-+  if (!cap.auto || !armed) return;
-+  if (now - since >= cap.holdMs) {
-+    armed = false; lastCaptured = v; ref = null;
-+    capture({ value: v, unit: d.unit, source: sourceName() });
++  announced = e.announced;
++  if (!cap.auto || !e.armed) return;
++  if (now - e.since >= cap.holdMs) {
++    e.armed = false; e.lastCaptured = v; e.ref = null;
++    capture({ value: v, unit: d.unit, source: nomeAparelho(kind), mode });
 +  }
++}
++/** «Limpar e gravar de novo» (ficha no estudo): a próxima leitura firme grava outra vez, mesmo sem tirar a ponta. */
++function rearmar() {
++  for (const k of Object.keys(est)) { est[k].armed = true; est[k].ref = null; est[k].lastCaptured = null; est[k].announced = false; }
++  announced = false;
 +}
 +
 +function onKey(e: KeyboardEvent) {
@@ -9701,7 +9787,8 @@ index 00000000..d3f00f9d
 +  const w = window as unknown as Record<string, unknown>;
 +  // a leitura estável agora é decidida aqui (tempo ajustável); a do app fica só de reserva
 +  w.__2rMeterCapture = () => { /* captura feita por onLive() */ };
-+  w.__2rMeterLive = (d: { value: number | null; unit: string; text: string }) => onLive(d);
++  w.__2rMeterLive = (d: LiveIn) => onLive(d);
++  w.__2rMeterRearm = () => rearmar();
 +  w.__2rMeterStatus = (d: MeterStatus) => {
 +    status = d; emit();
 +    if (d.state === 'on') meterApi()?.who?.().then(r => { who = r?.name || ''; emit(); }).catch(() => {});
@@ -10012,10 +10099,10 @@ index 00000000..54b8eb14
 +}
 diff --git a/src/frontend/src/r2/sounds.ts b/src/frontend/src/r2/sounds.ts
 new file mode 100644
-index 00000000..bf1fbed1
+index 00000000..c1bbb32a
 --- /dev/null
 +++ b/src/frontend/src/r2/sounds.ts
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,42 @@
 +/**
 + * 2R Tools: avisos sonoros das medições (Roger, 10/10/2026): «agradável quando
 + * está dentro da margem… muito fora, um aviso mais tenso ou grave».
@@ -10053,7 +10140,9 @@ index 00000000..bf1fbed1
 +
 +// ── segundo padrão (Roger, 21:11): «na leitura e se gravou direito ou não» ──
 +/** Gravou: dois tiques curtos e agudos, bem diferentes dos sons da leitura. */
-+export function playSaved() { tone(2093, 0, 0.045, 'sine', 0.12); tone(2093, 0.08, 0.045, 'sine', 0.12); }
++// 2R 30/10/2026 (Roger: «fazer um beep quando gravar automaticamente»): bip claro (1,6 kHz, 0,13 s) — os dois tiques
++// de 45 ms quase não se ouviam
++export function playSaved() { tone(1568, 0, 0.13, 'square', 0.16); }
 +/** Não gravou (sem pino selecionado ou sem leitura): três notas descendo. */
 +export function playNotSaved() { tone(660, 0, 0.11, 'square', 0.08); tone(494, 0.12, 0.11, 'square', 0.08); tone(330, 0.24, 0.2, 'square', 0.08); }
 diff --git a/src/frontend/src/r2/translate.ts b/src/frontend/src/r2/translate.ts

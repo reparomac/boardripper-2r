@@ -1,7 +1,7 @@
 From 8c9be83d69b2952758b9ef1a14146c7b271a01b9 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 30 Oct 2026 02:14:57 -0300
-Subject: [PATCH 28/32] r2: busca de placa doadora (codigo/posicao/linha,
+Subject: [PATCH 28/37] r2: busca de placa doadora (codigo/posicao/linha,
  online/local, ate 20), botao direito abre a busca, item ativo da barra
  lateral branco com contorno laranja
 

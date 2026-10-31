@@ -40,6 +40,10 @@ and to give credit and code back to the community.
 - Donor board search (part code, position or net, online/local library, up to 20 boards); right-click a part or net to search
 - GHOST button next to TOP / BOTTOM / BUTTERFLY, with the upstream ghost behaviour unchanged (hidden-side parts of the
   highlighted net, then Disco, then off)
+- Point-to-point sheet with live meters: Rigol DM858E for voltage/resistance and i2C C09 for diode, the mode and
+  reading taken from the 2R Tools Cockpit display, a reading saved only when it holds steady for 2 s (narrow band,
+  floating probes are ignored), each meter can be switched off, no reading toasts
+- Thinner net connection line (half) without the neon glow; default layout "large board | PDF"
 - Extra EN/ES translations, language switch without restart
 - Server bound to localhost only
 

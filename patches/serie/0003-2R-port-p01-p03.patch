@@ -1,7 +1,7 @@
 From 9ed4b062f4c638d3ac3c228cfc8994844939f774 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:25:05 -0300
-Subject: [PATCH 03/32] 2R port p01-p03
+Subject: [PATCH 03/37] 2R port p01-p03
 
 ---
  src/frontend/src/components/MenuBar2R.tsx    |  4 +-

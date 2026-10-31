@@ -1,0 +1,143 @@
+From b73fb89cbdc150b537780f3577ff1a5629f3da20 Mon Sep 17 00:00:00 2001
+From: 2R Tools <reparomacbr@gmail.com>
+Date: Fri, 30 Oct 2026 21:01:13 -0300
+Subject: [PATCH 34/37] =?UTF-8?q?r2:=20painel=20do=20ponto=20a=20ponto=20m?=
+ =?UTF-8?q?ostra=20o=20aparelho=20que=20est=C3=A1=20capturando=20e=20o=20q?=
+ =?UTF-8?q?ue=20gravou=20cada=20valor?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/components/GuideHud.tsx | 18 +++++++++++++++---
+ src/frontend/src/index.css               |  5 +++++
+ src/frontend/src/r2/guide-store.ts       |  7 ++++---
+ src/frontend/src/r2/meter-store.ts       |  4 +++-
+ 4 files changed, 27 insertions(+), 7 deletions(-)
+
+diff --git a/src/frontend/src/components/GuideHud.tsx b/src/frontend/src/components/GuideHud.tsx
+index 7d8bc3b2..fac67435 100644
+--- a/src/frontend/src/components/GuideHud.tsx
++++ b/src/frontend/src/components/GuideHud.tsx
+@@ -3,6 +3,7 @@ import { guideStore } from '../r2/guide-store';
+ import { useBoardStore } from '../hooks/useBoardStore';
+ import { boardStore } from '../store/board-store';
+ import { bgaBall } from '../r2/bga';
++import { meterStore } from '../r2/meter-store';
+ import { jsx as r2jsx, jsxs as r2jsxs, Fragment as R2Frag } from 'react/jsx-runtime';
+ const R2D = { jsx: r2jsx, jsxs: r2jsxs, Fragment: R2Frag };
+ type GInfo = { gn: number; gk: number; gm: number; nome?: string; cor: string; novo?: boolean };
+@@ -15,6 +16,7 @@ const r2h = window as unknown as {
+ /** 2R Tools: faixa do Teleguiado em cima da placa — passo atual, net, ponto indicado e setas. */
+ export function GuideHud() {
+   useSyncExternalStore(guideStore.subscribe, () => guideStore.rev);
++  useSyncExternalStore(meterStore.subscribe, () => meterStore.rev);
+   useBoardStore();
+   const a = guideStore.active;
+   if (!guideStore.on || !a) return null;
+@@ -53,12 +55,22 @@ export function GuideHud() {
+           })()}
+         </div>
+         {(r.step.v || r.step.d || r.step.r) && <div className="r2gd-hud-vals">
+-          {r.step.v && <span>Tensão <b>{r.step.v}</b></span>}
+-          {r.step.d && <span>Diodo <b>{r.step.d}</b></span>}
+-          {r.step.r && <span>Resist. <b>{r.step.r}</b></span>}
++          {r.step.v && <span>Tensão <b>{r.step.v}</b>{r.step.vs && <i className="r2gd-hud-src"> {r.step.vs}</i>}</span>}
++          {r.step.d && <span>Diodo <b>{r.step.d}</b>{r.step.ds && <i className="r2gd-hud-src"> {r.step.ds}</i>}</span>}
++          {r.step.r && <span>Resist. <b>{r.step.r}</b>{r.step.rs && <i className="r2gd-hud-src"> {r.step.rs}</i>}</span>}
+           {r2h.__r2rp && r2h.__r2rp.on && (r.step.iv || r.step.id || r.step.ir) && <span>Esperado <b>{[r.step.iv, r.step.id, r.step.ir].filter(Boolean).join(' | ')}</b></span>}
+           {r2h.__r2rp && r2h.__r2rp.on && r.step.valAt && <span>medido em <b>{new Date(r.step.valAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</b>{r.step.valBy ? ' · ' + r.step.valBy : ''}</span>}
+         </div>}
++        {(() => {
++          // 2R 30/10/2026 (Roger: «mostrar no painel qual instrumento ele tá fazendo a captura»)
++          const L = meterStore.liveBy, now = Date.now();
++          const on = Object.values(L).filter(x => x && now - x.t < 4000);
++          if (!on.length) return null;
++          const M: Record<string, string> = { tensao: 'tensão', resistencia: 'resistência', diodo: 'diodo' };
++          return <div className="r2gd-hud-cap">{on.map(x => (
++            <span key={x.source} className={x.aceita ? 'on' : 'off'} title={x.aceita ? 'Este aparelho está gravando neste modo' : 'Neste modo a gravação é pelo outro aparelho'}>
++              {x.aceita ? '● capturando: ' : '○ '}<b>{x.source}</b> · {M[x.mode] || x.mode}</span>))}</div>;
++        })()}
+         {canFix && <button className="r2gd-hud-fix" title="Usar o pino selecionado como ponto deste passo" onClick={() => guideStore.pinSelectedAsPoint()}>◆ usar {selLabel}</button>}
+       </div>
+       <button className="r2gd-hud-arrow" title="Próximo passo (→)" onClick={() => guideStore.next()} disabled={guideStore.pos >= a.steps.length - 1}>›</button>
+diff --git a/src/frontend/src/index.css b/src/frontend/src/index.css
+index 988651ba..bcf3ae0b 100644
+--- a/src/frontend/src/index.css
++++ b/src/frontend/src/index.css
+@@ -10356,6 +10356,11 @@ html.r2 .toolbar-search { min-width:320px; }
+ .r2gd-cell.has { color: var(--r2-strong); font-weight: 700; }
+ .r2gd-hud-vals { display: flex; justify-content: center; gap: 14px; font-size: 12px; color: var(--r2-mute); margin-top: 3px; }
+ .r2gd-hud-vals b { color: var(--r2-strong); font-family: ui-monospace, Menlo, monospace; }
++/* 2R 30/10/2026: aparelho que gravou cada valor e quem está capturando agora */
++.r2gd-hud-src { font-style: normal; font-size: 10.5px; color: #E0A040; margin-left: 4px; }
++.r2gd-hud-cap { display: flex; justify-content: center; gap: 12px; font-size: 11.5px; margin-top: 4px; }
++.r2gd-hud-cap .on { color: #5FD08A; } .r2gd-hud-cap .on b { color: var(--r2-strong); }
++.r2gd-hud-cap .off { color: var(--r2-mute); opacity: .7; }
+ .r2gd-extra { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 4px; cursor: default; }
+ .r2gd-step .r2gd-nets { word-break: break-word; overflow-wrap: anywhere; }
+ /* menus de texto dentro da barra de ícones (uma barra só) */
+diff --git a/src/frontend/src/r2/guide-store.ts b/src/frontend/src/r2/guide-store.ts
+index 35c557fd..c2ec0334 100644
+--- a/src/frontend/src/r2/guide-store.ts
++++ b/src/frontend/src/r2/guide-store.ts
+@@ -21,6 +21,7 @@ export interface Step { n: number; nets: string[]; note: string; raw: string; /*
+   /** valores do passo (Roger: «add mais 3 colunas, como tensão, modo diodo e resistência… editável durante a
+    *  leitura dos pontos, pelos instrumentos ou manualmente») — texto como o técnico escreve */
+   v?: string; d?: string; r?: string; /** quem/quando preencheu pelo instrumento */ valBy?: string; valAt?: number;
++  /** 2R 30/10/2026: aparelho que gravou cada valor (Rigol DM858E / i2C C09 / manual) */ vs?: string; ds?: string; rs?: string;
+   /** Ponto a ponto (Roger, 11/10/2026): nome do teste (renomeável), valor certo (ideal) e a estrela
+    *  do «valor certo depois do reparo» (vira referência). */
+   name?: string; iv?: string; id?: string; ir?: string; star?: boolean;
+@@ -436,7 +437,7 @@ export const guideStore = {
+     const steps = active.steps.map((st, k) => (k === i ? { ...st, ...patch } : st));
+     replaceActive(steps);
+     if (r2w.__r2Anot) r2w.__r2Anot(active, i, patch);
+-    const onlyValues = Object.keys(patch).every(k => ['v', 'd', 'r', 'valBy', 'valAt', 'note'].includes(k));
++    const onlyValues = Object.keys(patch).every(k => ['v', 'd', 'r', 'valBy', 'valAt', 'note', 'vs', 'ds', 'rs'].includes(k));
+     if (i === pos && !onlyValues) { pointIdx = 0; if (on) show(); }
+   },
+   /** Fixa o pino selecionado na placa como o ponto do passo atual. */
+@@ -500,13 +501,13 @@ export const guideStore = {
+     return label;
+   },
+   /** Leitura do instrumento com a sequência ligada: preenche a coluna do modo no passo atual. */
+-  recordValue(mode: 'tensao' | 'diodo' | 'resistencia', value: number, unit: string, by = ''): boolean {
++  recordValue(mode: 'tensao' | 'diodo' | 'resistencia', value: number, unit: string, by = '', src = ''): boolean {
+     if (!on || !active || !active.steps[pos] || (r2w.__r2rp && r2w.__r2rp.on)) return false;
+     const key = mode === 'tensao' ? 'v' : mode === 'diodo' ? 'd' : 'r';
+     // 2R 26/10/2026: valores no padrão do SDS (vírgula, V com 2 casas) — window.__r2Num vem do index.html
+     const txt = r2w.__r2Num ? r2w.__r2Num(key, String(value)) : mode === 'resistencia' ? fmtOhm(value) : value.toFixed(3);
+     void unit;
+-    guideStore.editStep(pos, { [key]: txt as string, valBy: by, valAt: Date.now() } as Partial<Step>);
++    guideStore.editStep(pos, { [key]: txt as string, [key + 's']: src || undefined, valBy: by, valAt: Date.now() } as Partial<Step>);
+     return true;
+   },
+   // ── programar os pontos a medir (Roger, 11/10/2026): clicar/buscar na placa e no PDF,
+diff --git a/src/frontend/src/r2/meter-store.ts b/src/frontend/src/r2/meter-store.ts
+index ddcbed5e..ec36589d 100644
+--- a/src/frontend/src/r2/meter-store.ts
++++ b/src/frontend/src/r2/meter-store.ts
+@@ -144,6 +144,8 @@ export const meterStore = {
+   get rev() { return rev; },
+   get list() { return list; },
+   get live() { return live; },
++  /** 2R 30/10/2026: última leitura de cada aparelho (rigol / i2c), com o modo e se ele grava nesse modo. */
++  get liveBy() { return liveBy; },
+   get status() { return status; },
+   get via() { return via; },
+   get redo() { return redo; },
+@@ -316,7 +318,7 @@ function capture(d: { value: number; unit: string; source: string; mode?: Mode }
+   boardStore.addToast(`${here}${m.via ? ` (medido em ${m.via})` : ''} (${m.net || 'sem net'}): ${d.value.toFixed(3)}`
+     + (m.status === 'ok' ? ' — OK' : m.status === 'fora' ? ` — fora do esperado (${expStr})` : ''), m.status === 'fora' ? 'error' : 'info');
+   // Sequência de start ligada: a leitura também vai para a coluna do passo atual
+-  if (guideStore.on && guideStore.recordValue(mode, d.value, d.unit, who)) return;
++  if (guideStore.on && guideStore.recordValue(mode, d.value, d.unit, who, d.source)) return;
+   if (seqPrefs.auto) window.setTimeout(() => stepPin(1), 250);   // próximo pino da sequência
+ }
+ 
+-- 
+2.43.0
+

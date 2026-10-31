@@ -1,7 +1,7 @@
 From ef9576959ea2f8cb8468294a668da1ce1d4c4c42 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 29 Oct 2026 03:09:31 -0300
-Subject: [PATCH 26/32] r2: estudo preso a placa dele, botao direito copia
+Subject: [PATCH 26/37] r2: estudo preso a placa dele, botao direito copia
  net/pino/peca, ponto mais proximo ignora CI grande
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

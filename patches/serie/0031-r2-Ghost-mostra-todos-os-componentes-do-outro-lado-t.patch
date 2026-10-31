@@ -1,7 +1,7 @@
 From d79a4478b4c877cb7a9d3e4873bc3ce58e1b6177 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 30 Oct 2026 04:54:22 -0300
-Subject: [PATCH 31/32] r2: Ghost mostra todos os componentes do outro lado,
+Subject: [PATCH 31/37] r2: Ghost mostra todos os componentes do outro lado,
  transparentes com contorno vermelho neon
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

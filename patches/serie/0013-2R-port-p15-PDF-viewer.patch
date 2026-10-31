@@ -1,7 +1,7 @@
 From 97558e37b454bea1ec218ed6cc7ad6d2b111cf2c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:38:14 -0300
-Subject: [PATCH 13/32] 2R port p15 PDF viewer
+Subject: [PATCH 13/37] 2R port p15 PDF viewer
 
 ---
  src/frontend/src/panels/PdfViewerPanel.tsx | 400 ++++++++++++---------

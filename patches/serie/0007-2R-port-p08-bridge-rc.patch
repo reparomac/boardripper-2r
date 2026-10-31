@@ -1,7 +1,7 @@
 From 436ec575ad634b1894116720813f39a7494b84dc Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 28 Oct 2026 20:29:12 -0300
-Subject: [PATCH 07/32] 2R port p08 bridge + rc
+Subject: [PATCH 07/37] 2R port p08 bridge + rc
 
 ---
  src/frontend/src/main.tsx      |  1 +

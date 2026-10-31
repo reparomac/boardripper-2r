@@ -38,3 +38,11 @@ Nada disto foi enviado ao GitHub.
 - Ghost do upstream 0.50 de volta na íntegra (`R2_SEM_FANTASMAS = false`, padrão ligado); botão GHOST junto de
   TOP / BOTTOM / BUTTERFLY no `index.html` (ciclo do original: ghost → disco → desliga).
 - Item ativo da barra lateral: ícone e texto brancos, fundo preto, contorno laranja.
+
+## 31/10/2026
+- Ficha no estudo (meter-store.ts + index.html do SDS): leitura só vale quando a janela inteira (2 s, ≥5 leituras)
+  fica numa faixa estreita (`window.__2rEstavel`); aparelho desativável (`window.__2rMeterOff`, localStorage
+  `2r-meter-off`); modo e texto vêm do visor do Cockpit (`visor` na leitura); Rigol só grava tensão/resistência,
+  C09 só diodo, modo «outro» não grava; sem os cards azuis (`window.__2rMeterToasts` liga de volta).
+- Linha da net: `window.__r2NetLineK = 0.2875` e `window.__r2NeonK = 0` no index.html.
+- O layout pdf-board-13 foi revertido (o SDS usa «Placa grande | PDF», board-pdf-23).

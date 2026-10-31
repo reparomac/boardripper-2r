@@ -1,0 +1,173 @@
+From fcccc2918f5ca6a65a49c17d33314a55517d6b4e Mon Sep 17 00:00:00 2001
+From: 2R Tools <reparomacbr@gmail.com>
+Date: Fri, 30 Oct 2026 20:53:27 -0300
+Subject: [PATCH 33/37] =?UTF-8?q?r2:=20leitura=20por=20aparelho=20(Rigol?=
+ =?UTF-8?q?=20=3D=20tens=C3=A3o/resist=C3=AAncia,=20C09=20=3D=20diodo),=20?=
+ =?UTF-8?q?rearmar=20captura,=20bip=20claro=20ao=20gravar?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/r2/meter-store.ts | 85 ++++++++++++++++++++++--------
+ src/frontend/src/r2/sounds.ts      |  4 +-
+ 2 files changed, 67 insertions(+), 22 deletions(-)
+
+diff --git a/src/frontend/src/r2/meter-store.ts b/src/frontend/src/r2/meter-store.ts
+index d3f00f9d..ddcbed5e 100644
+--- a/src/frontend/src/r2/meter-store.ts
++++ b/src/frontend/src/r2/meter-store.ts
+@@ -205,13 +205,23 @@ export const meterStore = {
+   /** Captura manual (botão ou tecla): grava a leitura que está na tela agora. */
+   captureNow() {
+     if (live?.value == null) { if (cap.soundSave) playNotSaved(); boardStore.addToast('Sem leitura agora (ponta aberta).', 'info'); return; }
+-    capture({ value: live.value, unit: live.unit, source: sourceName() });
++    capture({ value: live.value, unit: live.unit, source: liveSource || sourceName(), mode: liveMode ?? undefined });
+   },
+   testSound(kind: 'ok' | 'warn' | 'bad' | 'saved' | 'notsaved') {
+     ({ ok: playOk, warn: playWarn, bad: playBad, saved: playSaved, notsaved: playNotSaved })[kind]();
+   },
+ };
+ 
++/** 2R 30/10/2026: o modo vem do campo «mode» do aparelho quando existe (o i2C C09 manda unit «V» também no
++ *  diodo — por isso as leituras de diodo dele entravam como tensão). */
++export function modeFrom(unit: string, mode?: string): Mode {
++  const m = (mode || '').toLowerCase();
++  if (m.includes('diod')) return 'diodo';
++  if (m.includes('ohm') || m.includes('res') || m.includes('Ω')) return 'resistencia';
++  if (m.includes('volt') || m.includes('tens') || m.includes('dcv') || m.includes('acv')) return 'tensao';
++  return modeOf(unit);
++}
++
+ export function modeOf(unit: string): Mode {
+   const u = (unit || '').toUpperCase();
+   if (u.includes('DIOD')) return 'diodo';
+@@ -270,7 +280,7 @@ function verdictSound(value: number, unit: string) {
+   (m.status === 'ok' ? playOk : m.status === 'fora' ? (lastSeverity >= 2 ? playBad : playWarn) : playTick)();
+ }
+ 
+-function capture(d: { value: number; unit: string; source: string }) {
++function capture(d: { value: number; unit: string; source: string; mode?: Mode }) {
+   const tab = boardStore.activeTab;
+   const sel = tab?.selection;
+   const part = tab?.board && sel?.partIndex != null ? tab.board.parts[sel.partIndex] : null;
+@@ -280,7 +290,7 @@ function capture(d: { value: number; unit: string; source: string }) {
+     boardStore.addToast('Leitura ' + d.value.toFixed(3) + ' recebida — selecione o pino na placa para guardar.', 'info');
+     return;
+   }
+-  const mode = modeOf(d.unit);
++  const mode = d.mode ?? modeOf(d.unit);
+   const obd = obdNetLookup(obdBoardNumberFor(tab) ?? undefined, pin.net)[0];
+   const expStr = (mode === 'diodo' ? obd?.diode : mode === 'tensao' ? obd?.voltage : obd?.resistance) ?? '';
+   let m: Medicao = judge({ t: Date.now(), board: tab.fileName, part: part.name, pin: pin.number || pin.name, net: pin.net || '',
+@@ -311,32 +321,64 @@ function capture(d: { value: number; unit: string; source: string }) {
+ }
+ 
+ // ── captura automática: leitura parada pelo tempo escolhido, uma por toque ──
+-let since = 0, ref: number | null = null, armed = true, lastCaptured: number | null = null;
+-/** O som da leitura já tocou neste toque da ponta. */
++// 2R 30/10/2026 (Roger: «a leitura do multímetro está errada… tensão ou resistência a captura tem que ser pelo Rigol
++// DM858E; modo diodo a leitura é feita pelo i2C C09»): o SDS manda as leituras dos DOIS aparelhos pela mesma porta,
++// misturadas. Agora cada aparelho tem o seu estado de estabilidade e só vale: Rigol em tensão/resistência, C09 em diodo.
++interface LiveIn { value: number | null; unit: string; text: string; kind?: string; mode?: string }
++interface Est { since: number; ref: number | null; armed: boolean; lastCaptured: number | null; announced: boolean }
++const est: Record<string, Est> = {};
++const liveBy: Record<string, { value: number | null; unit: string; text: string; mode: Mode; source: string; t: number; aceita: boolean }> = {};
++let liveSource = '';
++let liveMode: Mode | null = null;
++/** O som da leitura já tocou neste toque da ponta (aparelho da última leitura aceita). */
+ let announced = false;
+-function onLive(d: { value: number | null; unit: string; text: string }) {
+-  live = d; emit();
++function nomeAparelho(kind: string): string {
++  return kind === 'i2c' ? 'i2C C09' : kind === 'rigol' ? 'Rigol DM858E' : sourceName();
++}
++function aceita(kind: string, mode: Mode): boolean {
++  if (kind === 'i2c') return mode === 'diodo';
++  if (kind === 'rigol') return mode !== 'diodo';
++  return true;
++}
++function publicaLive() {
++  const w = window as unknown as Record<string, unknown>;
++  w.__2rMeterLiveAll = liveBy;
++  try { window.dispatchEvent(new CustomEvent('r2-meter-live', { detail: liveBy })); } catch { /* */ }
++}
++function onLive(d: LiveIn) {
++  const kind = d.kind || '';
++  const mode = modeFrom(d.unit, d.mode);
++  const ok = aceita(kind, mode);
++  liveBy[kind || 'm'] = { value: d.value, unit: d.unit, text: d.text, mode, source: nomeAparelho(kind), t: Date.now(), aceita: ok };
++  publicaLive();
++  if (!ok) { emit(); return; }                     // aparelho no modo que não é dele: mostra, não grava
++  live = { value: d.value, unit: d.unit, text: d.text }; liveSource = nomeAparelho(kind); liveMode = mode; emit();
++  const e = est[kind] || (est[kind] = { since: 0, ref: null, armed: true, lastCaptured: null, announced: false });
+   const v = d.value;
+   const now = Date.now();
+-  if (v == null) { armed = true; ref = null; announced = false; return; }          // ponta aberta: pronto para o próximo ponto
+-  // ponta tirada em tensão/resistência (lê ~0) ou mudou muito: libera de novo
+-  if (!armed && lastCaptured !== null) {
+-    const moved = Math.abs(v - lastCaptured) > Math.max(0.01, Math.abs(lastCaptured) * 0.1);
+-    if (moved) { armed = true; announced = false; }
++  if (v == null) { e.armed = true; e.ref = null; e.announced = false; announced = false; return; }   // ponta aberta: pronto para o próximo ponto
++  if (!e.armed && e.lastCaptured !== null) {
++    const moved = Math.abs(v - e.lastCaptured) > Math.max(0.01, Math.abs(e.lastCaptured) * 0.1);
++    if (moved) { e.armed = true; e.announced = false; }
+   }
+   const band = (r: number) => Math.max(0.003, Math.abs(r) * 0.01);
+-  if (ref === null || Math.abs(v - ref) > band(ref)) { ref = v; since = now; announced = false; return; }
+-  // som da leitura assim que firma (antes de gravar) — também ajuda na captura manual
+-  if (!announced && now - since >= Math.min(350, cap.holdMs / 2)) {
+-    announced = true;
++  if (e.ref === null || Math.abs(v - e.ref) > band(e.ref)) { e.ref = v; e.since = now; e.announced = false; announced = false; return; }
++  if (!e.announced && now - e.since >= Math.min(350, cap.holdMs / 2)) {
++    e.announced = true;
+     if (cap.sound) verdictSound(v, d.unit);
+   }
+-  if (!cap.auto || !armed) return;
+-  if (now - since >= cap.holdMs) {
+-    armed = false; lastCaptured = v; ref = null;
+-    capture({ value: v, unit: d.unit, source: sourceName() });
++  announced = e.announced;
++  if (!cap.auto || !e.armed) return;
++  if (now - e.since >= cap.holdMs) {
++    e.armed = false; e.lastCaptured = v; e.ref = null;
++    capture({ value: v, unit: d.unit, source: nomeAparelho(kind), mode });
+   }
+ }
++/** «Limpar e gravar de novo» (ficha no estudo): a próxima leitura firme grava outra vez, mesmo sem tirar a ponta. */
++function rearmar() {
++  for (const k of Object.keys(est)) { est[k].armed = true; est[k].ref = null; est[k].lastCaptured = null; est[k].announced = false; }
++  announced = false;
++}
+ 
+ function onKey(e: KeyboardEvent) {
+   if (cap.auto || status.state !== 'on') return;
+@@ -352,7 +394,8 @@ export function installMeter(): void {
+   const w = window as unknown as Record<string, unknown>;
+   // a leitura estável agora é decidida aqui (tempo ajustável); a do app fica só de reserva
+   w.__2rMeterCapture = () => { /* captura feita por onLive() */ };
+-  w.__2rMeterLive = (d: { value: number | null; unit: string; text: string }) => onLive(d);
++  w.__2rMeterLive = (d: LiveIn) => onLive(d);
++  w.__2rMeterRearm = () => rearmar();
+   w.__2rMeterStatus = (d: MeterStatus) => {
+     status = d; emit();
+     if (d.state === 'on') meterApi()?.who?.().then(r => { who = r?.name || ''; emit(); }).catch(() => {});
+diff --git a/src/frontend/src/r2/sounds.ts b/src/frontend/src/r2/sounds.ts
+index bf1fbed1..c1bbb32a 100644
+--- a/src/frontend/src/r2/sounds.ts
++++ b/src/frontend/src/r2/sounds.ts
+@@ -35,6 +35,8 @@ export function playTick() { tone(1200, 0, 0.05, 'sine', 0.10); }
+ 
+ // ── segundo padrão (Roger, 21:11): «na leitura e se gravou direito ou não» ──
+ /** Gravou: dois tiques curtos e agudos, bem diferentes dos sons da leitura. */
+-export function playSaved() { tone(2093, 0, 0.045, 'sine', 0.12); tone(2093, 0.08, 0.045, 'sine', 0.12); }
++// 2R 30/10/2026 (Roger: «fazer um beep quando gravar automaticamente»): bip claro (1,6 kHz, 0,13 s) — os dois tiques
++// de 45 ms quase não se ouviam
++export function playSaved() { tone(1568, 0, 0.13, 'square', 0.16); }
+ /** Não gravou (sem pino selecionado ou sem leitura): três notas descendo. */
+ export function playNotSaved() { tone(660, 0, 0.11, 'square', 0.08); tone(494, 0.12, 0.11, 'square', 0.08); tone(330, 0.24, 0.2, 'square', 0.08); }
+-- 
+2.43.0
+

@@ -1,6 +1,35 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>/* 31/10/2026 (Roger): leituras do multímetro sem os cards azuis; captura automática só quando a leitura fica
+       firme por 2 s (antes 1 s). Uma vez só: quem tinha o padrão de 1 s passa para 2 s; a escolha da tela continua valendo. */
+    /* 31/10/2026 09h12 (Roger: «os dois multímetros ficam oscilando o tempo todo, isso não é uma medição… só levar em
+       conta quando estabilizar a leitura»): a leitura só vale quando TODA a janela (o tempo da captura, 2 s) ficou
+       dentro de uma faixa estreita — diodo 2 mV; tensão 2 mV ou 0,3 %; resistência 0,5 Ω ou 0,5 % — com pelo menos 5
+       leituras. Ponta solta/flutuando oscila mais que isso e não grava. Depois de gravar, só volta a gravar quando a
+       ponta sai (OL) ou a leitura muda de verdade (50 mV / 20 %; resistência 5 Ω / 20 %) e firma de novo. */
+    window.__2rEstavel = function (s, v, t, modo, hold) {
+      var av = Math.abs(v), tol = modo === 'diodo' ? 0.002 : modo === 'resistencia' ? Math.max(0.5, av * 0.005) : Math.max(0.002, av * 0.003);
+      if (!s.armed && s.lastCaptured != null) {
+        var lc = Math.abs(s.lastCaptured), mud = modo === 'resistencia' ? Math.max(5, lc * 0.2) : Math.max(0.05, lc * 0.2);
+        if (Math.abs(v - s.lastCaptured) > mud) s.armed = true;
+      }
+      var r = s.run;
+      if (!r || Math.max(r.max, v) - Math.min(r.min, v) > tol) {
+        s.run = { ini: t, min: v, max: v, n: 1 };
+        return { reinicio: true };
+      }
+      r.min = Math.min(r.min, v); r.max = Math.max(r.max, v); r.n++;
+      var idade = t - r.ini;
+      return { bip: r.n >= 4 && idade >= Math.min(1000, hold / 2), pronto: r.n >= 5 && idade >= hold, valor: v };
+    };
+    /* 31/10/2026 09h14 (Roger: «diminuir 50% sem efeito neon»): linha da net com metade da espessura (×0,575 → ×0,2875)
+       e sem o brilho neon em volta dela */
+    window.__r2NetLineK = 0.2875; window.__r2NeonK = 0;
+    try { window.__2rMeterOff = JSON.parse(localStorage.getItem('2r-meter-off') || '{}') || {}; } catch (e) { window.__2rMeterOff = {}; }
+    (function () { try { var K = '2r-medicoes-captura', M = '2r-hold2s-20261031';
+      if (!localStorage.getItem(M)) { var c = JSON.parse(localStorage.getItem(K) || '{}'); c.holdMs = 2000; localStorage.setItem(K, JSON.stringify(c)); localStorage.setItem(M, '1'); }
+    } catch (e) {} })();</script>
     <script>/* 2R 29/10/2026 (lentidão no Windows): mede cada timer da página; os que passam de 150 ms vão para o
        desempenho_web.txt junto com o «MINUTO · travamentos», com o começo do código — assim dá para saber o culpado. */
     (function () {
@@ -33,8 +62,8 @@
     <title>BoardRipper</title>
     <!-- 2R 24/10/2026: contornos reais de placas parecidas (placas cujo arquivo traz só o retângulo) -->
     <script src="./r2-contornos.js"></script>
-    <script type="module" crossorigin src="./assets/index-Pwx9MCzb.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-4Gg0rbsj.css">
+    <script type="module" crossorigin src="./assets/index-CVIjD5fy.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-P6PVncXz.css">
   <style>/* BDV só do servidor (Roger, 26/10/2026): sem a aba «Local» (biblioteca deste computador) */
 .r2-acvseg{display:none!important}
 .activity-rail-item[data-sidebar-tab="library"]{display:none!important}
@@ -441,7 +470,10 @@ window.__r2Esp = function (d, st) {
           var gs = (TODOS || []).map(function (g) {
             var es = g.estudos.filter(function (e) {
               if (e.em_mescla && e.em_mescla_placa === g.board && g.estudos.some(function (m) { return m.id === e.em_mescla; })) return false;   // está dentro do card junto (26/10/2026)
-              var txt = ((g.modelo || '') + ' ' + g.board + ' ' + (g.folder || '') + ' ' + e.title + ' ' + (e.modelo || '') + ' ' +
+              // 30/10/2026 (Roger: busca de um modelo trazia outras placas): o modelo do estudo só conta na placa dele —
+              // estudo geral listado em várias placas não faz a A1989 aparecer em 820-01700, 820-01041…
+              var meu = !e.placa || e.placa === g.board;
+              var txt = ((g.modelo || '') + ' ' + g.board + ' ' + (g.folder || '') + ' ' + e.title + ' ' + (meu ? (e.modelo || '') : '') + ' ' +
                          (e.fontes || []).map(function (f) { return f.nome + ' ' + f.titulo; }).join(' ')).toLowerCase();
               return q.every(function (w) { return txt.indexOf(w) >= 0; });
             });
@@ -993,7 +1025,14 @@ window.__r2Esp = function (d, st) {
           b.className = 'activity-rail-item';
           b.style.display = 'none';   // grupo de estudo / Modo DEV (21/10/2026): só aparece para quem tem acesso
           b.innerHTML = '<span class="activity-rail-ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"/></svg></span><span class="activity-rail-cap">Estudos</span>';
-          b.addEventListener('click', function () { abrir(b); });
+          // 30/10/2026 (Roger: «quando entrar em estudo, também abrir em uma aba, independente do BoardRipper»): no SDS o
+          // ícone abre a aba ESTUDOS (BoardRipper só dela); dentro dessa aba, ou fora do SDS, abre o painel aqui mesmo
+          b.addEventListener('click', function () {
+            var a = api();
+            if (PAN || window.__r2EhAbaEstudos || !a || !a.estudosAba) { abrir(b); return; }
+            a.estudosAba().then(function (j) { if (!j || !j.ok) { if (j && j.aqui) window.__r2EhAbaEstudos = 1; abrir(b); } })
+              .catch(function () { abrir(b); });
+          });
           document.addEventListener('click', function (e) {   // outra aba da coluna (Acervo, Medições, Ponto a ponto…) fecha os Estudos
             var t = e.target && e.target.closest && e.target.closest('.activity-rail-item[data-sidebar-tab]');
             if (t && Date.now() - (window.__r2EstProg || 0) > 1500 && t.getAttribute('data-sidebar-tab') !== 'guide-x') { document.body.classList.remove('r2-est-run'); }
@@ -1075,7 +1114,7 @@ window.__r2Esp = function (d, st) {
     <script>
       (function () {
         'use strict';
-        function nome(el) { var c = el.querySelector('.activity-rail-cap'); return ((c && c.textContent) || el.getAttribute('title') || '').trim().toLowerCase(); }
+        function nome(el) { var c = el.querySelector('.activity-rail-cap'); return ((c && c.textContent) || el.getAttribute('title') || el.getAttribute('data-r2title') || '').trim().toLowerCase(); }
         function ordenar() {
           var rail = document.querySelector('.activity-rail'); if (!rail) return;
           var first = rail.querySelector('.activity-rail-item'); if (!first) return;
@@ -2354,6 +2393,24 @@ window.__r2Esp = function (d, st) {
 #r2fe .b:hover{background:#2A2E34}
 #r2fe .b.p{background:#E6E8EB;color:#111;border-color:#E6E8EB}
 #r2fe .b i{display:inline-block;width:8px;height:8px;border-radius:50%;background:#FF6B66;margin-right:6px}
+/* 30/10/2026 (Roger): leitura ao vivo no card (qual aparelho, qual modo), valor maior, limpar e gravar de novo */
+#r2fe .vv{padding:7px 12px 2px;display:flex;flex-direction:column;gap:5px}
+#r2fe .vv .ln{display:flex;align-items:baseline;gap:8px;border:1px solid #2C3036;border-radius:9px;padding:6px 10px;background:#1A1D21}
+#r2fe .vv .ln.fora{opacity:.45}
+#r2fe .vv .ln.off{opacity:.5}
+#r2fe .vv .ln.off .vl{text-decoration:line-through}
+#r2fe .vv .lg{font:700 9.5px -apple-system,Segoe UI,sans-serif;letter-spacing:.04em;height:18px;padding:0 7px;border-radius:5px;border:1px solid #3A3E45;background:#202328;color:#C9CDD3;cursor:pointer;white-space:nowrap}
+#r2fe .vv .lg:hover{border-color:#E0A040;color:#fff}
+#r2fe .vv .ln.off .lg{border-color:#5FD08A;color:#5FD08A}
+#r2fe .vv .dsl{font-size:9.5px;font-weight:800;letter-spacing:.06em;color:#0B0C0E;background:#8A8F96;border-radius:5px;padding:1px 6px;white-space:nowrap}
+#r2fe .vv .ap{font-size:10.5px;color:#9AA0A8;font-weight:700;letter-spacing:.04em;white-space:nowrap}
+#r2fe .vv .md{font-size:10.5px;color:#E0A040;font-weight:700;letter-spacing:.04em;white-space:nowrap}
+#r2fe .vv .vl{margin-left:auto;font:700 20px/1.1 ui-monospace,Menlo,Consolas,monospace;color:#F2F3F5;white-space:nowrap}
+#r2fe .vv .ob{font-size:10.5px;color:#9AA0A8}
+#r2fe td.lv{font:700 15px/1.2 ui-monospace,Menlo,Consolas,monospace;color:#F2F3F5}
+#r2fe td .lk.limpa{font-size:13px;padding:0 4px}
+#r2fe td.lv .src{display:block;font:600 9.5px/1.2 Inter,-apple-system,sans-serif;color:#E0A040;letter-spacing:.03em;margin-top:2px}
+#r2fe .vv .cap{font-size:9.5px;font-weight:800;letter-spacing:.06em;color:#0B0C0E;background:#5FD08A;border-radius:5px;padding:1px 6px;white-space:nowrap}
 #r2fe .gv{display:none;gap:6px;padding:8px 12px;border-top:1px solid #2A2E33;align-items:center}
 #r2fe .gv.on{display:flex}
 #r2fe .gv input{flex:1;min-width:0;padding:6px 8px}
@@ -2363,6 +2420,12 @@ window.__r2Esp = function (d, st) {
 #r2sb-h{position:fixed;z-index:9001;width:16px;height:46px;display:none;align-items:center;justify-content:center;background:#17191C;border:1px solid #30343A;
   border-left:0;border-radius:0 9px 9px 0;color:#C9CED4;font:700 13px/1 -apple-system,"Inter","Segoe UI",sans-serif;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.4)}
 #r2sb-h:hover{color:#fff;background:#23272D}
+/* 30/10/2026 21h25 (Roger: «as 3 colunas… quero ter a opção de minimizar qualquer um deles, não ocultar ao mesmo
+   tempo»): a faixa de ícones do BoardRipper recolhe sozinha, sem mexer no menu do SDS nem na lista (Estudos / BDV) */
+body.r2-sem-rail .activity-rail-left{display:none!important}
+#r2rail-h{position:fixed;z-index:9001;width:16px;height:30px;display:none;align-items:center;justify-content:center;background:#17191C;border:1px solid #30343A;
+  border-left:0;border-radius:0 8px 8px 0;color:#9AA0A8;font:700 11px/1 -apple-system,"Inter","Segoe UI",sans-serif;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.4)}
+#r2rail-h:hover{color:#fff;background:#23272D}
 </style>
 <script>/* 29/10/2026 (Roger: «add a ficha dentro do estudo, assim podemos fazer as anotações, leituras e gravações dos pontos…
    e no final ou quando achar algo em falha, colocar na ficha» — opção 1; «deixar esses cards com possibilidade de mover e
@@ -2465,7 +2528,7 @@ window.__r2Esp = function (d, st) {
     passos().forEach(function (p) {
       var st = p.st, L = [['v', 'iv', ''], ['d', 'id', 'D '], ['r', 'ir', 'R ']], tem = false;
       L.forEach(function (k) {
-        if (st[k[0]]) { tem = true; out.push({ p: p, txt: k[2] + st[k[0]], s: sit(st[k[0]], st[k[1]]) }); }
+        if (st[k[0]]) { tem = true; out.push({ p: p, k: k[0], txt: k[2] + st[k[0]], src: st[k[0] + 's'] || '', s: sit(st[k[0]], st[k[1]]) }); }
       });
       if (!tem && p.i === pos) out.push({ p: p, txt: '—', s: 'pd' });
     });
@@ -2504,10 +2567,11 @@ window.__r2Esp = function (d, st) {
     if (ABA === 'lei') {
       var L = leituras();
       if (!L.length) return '<div class="mut" style="padding:10px">As leituras do multímetro entram aqui sozinhas. «Gravar leitura» digita à mão.</div>';
-      return '<table><tr><th>PASSO</th><th>NET</th><th>LEITURA</th><th></th></tr>' + L.map(function (r) {
+      return '<table><tr><th>PASSO</th><th>NET</th><th>LEITURA</th><th></th><th></th></tr>' + L.map(function (r) {
         var cls = r.s === 'ok' ? 'ok' : r.s === 'ng' ? 'ng' : 'pd', st = r.s === 'ok' ? 'OK' : r.s === 'ng' ? 'FORA' : r.txt === '—' ? 'a medir' : '';
         return '<tr data-i="' + r.p.i + '"' + (r.p.i === pos ? ' class="cur"' : '') + '><td class="mono">' + esc(r.p.lb) + '</td><td class="mono">' + esc(r.p.net) +
-          '</td><td>' + esc(r.txt) + '</td><td class="' + cls + '">' + st + '</td></tr>';
+          '</td><td class="lv">' + esc(r.txt) + (r.src ? '<span class="src">' + esc(r.src) + '</span>' : '') + '</td><td class="' + cls + '">' + st + '</td><td>' +
+          (r.k ? '<button class="lk limpa" data-a="limpar" data-i="' + r.p.i + '" data-k="' + r.k + '" title="Apagar esta leitura e gravar de novo (encoste a ponta)">×</button>' : '') + '</td></tr>';
       }).join('') + '</table>';
     }
     if (ABA === 'not') {
@@ -2565,10 +2629,63 @@ window.__r2Esp = function (d, st) {
       '<input data-k="r" placeholder="Resist. (Ω)" value="' + esc(st.r || '') + '"><button class="b p" data-a="ok">Salvar</button>';
     gv.classList.add('on'); gv.querySelector('input').focus();
   }
+  /* 30/10/2026 (Roger: «limpar a leitura se precisar e gravar novamente»): apaga a leitura (uma, ou todas do passo) e
+     rearma a captura — a próxima leitura firme do aparelho grava de novo, sem precisar tirar a ponta */
+  function limpar(i, k) {
+    var s = seq(); if (!s || !s.active) { toast('Ligue o ponto a ponto para limpar', 'error'); return; }
+    if (i == null) i = s.pos;
+    var st = s.active.steps[i]; if (!st) return;
+    var p = { valBy: undefined, valAt: undefined };
+    (k ? [k] : ['v', 'd', 'r']).forEach(function (c) { p[c] = undefined; p[c + 's'] = undefined; });
+    s.editStep(i, p);
+    if (i !== s.pos && s.go) s.go(i);
+    try { window.__2rMeterRearm && window.__2rMeterRearm(); } catch (e) {}
+    ABA = 'lei'; pinta(true);
+    /* 31/10/2026 (Roger): sem card azul — a ficha já mostra a leitura apagada */
+  }
+  /* leitura ao vivo: qual aparelho está lendo e em qual modo (tensão/resistência = Rigol DM858E; diodo = i2C C09) */
+  var MODO = { tensao: 'TENSÃO', resistencia: 'RESISTÊNCIA', diodo: 'DIODO' };
+  function vivoFmt(d) {
+    if (d.value == null) return 'OL';
+    var v = d.value, c = function (x) { return x.replace('.', ','); }, a = Math.abs(v);
+    if (d.mode === 'resistencia') return c(a >= 1e6 ? (v / 1e6).toFixed(2) + ' MΩ' : a >= 1e3 ? (v / 1e3).toFixed(2) + ' kΩ' : v.toFixed(1) + ' Ω');
+    if (d.mode === 'diodo') return c(v.toFixed(3));
+    return c(v.toFixed(3)) + ' V';
+  }
+  function vivo() {
+    if (!EL || !EL.classList.contains('on')) return;
+    var box = EL.querySelector('.vv'); if (!box) return;
+    var L = window.__2rMeterLiveAll || {}, agora = Date.now(), h = '';
+    /* 31/10/2026 (Roger): desativar o aparelho que não está usando (ex.: só Rigol, C09 desligado da captura).
+       Desativado: continua aparecendo apagado, mas não grava nada; «ativar» volta. Fica salvo. */
+    var OFF = window.__2rMeterOff || {};
+    if (!box.__r2off) { box.__r2off = 1; box.addEventListener('mousedown', function (e) {
+      var b = e.target.closest && e.target.closest('[data-off]'); if (!b) return;
+      e.preventDefault(); e.stopPropagation();
+      var k = b.getAttribute('data-off'), o = window.__2rMeterOff || (window.__2rMeterOff = {});
+      if (o[k]) delete o[k]; else o[k] = 1;
+      try { localStorage.setItem('2r-meter-off', JSON.stringify(o)); } catch (x) {}
+      toast(o[k] ? 'Captura desativada para este aparelho' : 'Captura ativada de novo'); vivo();
+    }, true); }
+    ['rigol', 'i2c', 'm'].forEach(function (k) {
+      var d = L[k]; if (!d || agora - d.t > 4000) return;
+      var off = !!OFF[k], ok = d.aceita && !off;
+      /* 31/10/2026 (Roger): o que aparece aqui é o visor do Cockpit (modo, número e unidade como estão na tela) */
+      var vz = d.vz, rot = vz && vz.rotulo ? String(vz.rotulo).toUpperCase() : (MODO[d.mode] || ''),
+          val = vz ? (String(vz.texto || '—') + (vz.unid ? ' ' + vz.unid : '')) : vivoFmt(d),
+          por = d.mode === 'outro' ? 'não grava: modo que a ficha não usa' : k === 'i2c' ? 'não grava: tensão é pelo Rigol' : 'não grava: diodo é pelo C09';
+      h += '<div class="ln' + (off ? ' off' : ok ? '' : ' fora') + '">' + (off ? '<span class="dsl">DESATIVADO</span>' : ok ? '<span class="cap">CAPTURANDO</span>' : '') + '<span class="ap">' + esc(d.source).toUpperCase() + '</span><span class="md">' + esc(rot) + '</span>' +
+        (off || ok ? '' : '<span class="ob">' + por + '</span>') +
+        '<span class="vl">' + esc(val) + '</span><button class="lg" data-off="' + k + '" title="' + (off ? 'Voltar a gravar as leituras deste aparelho' : 'Parar de gravar as leituras deste aparelho (o que não está usando)') + '">' + (off ? 'ativar' : 'desativar') + '</button></div>';
+    });
+    box.innerHTML = h || '<div class="mut">Sem leitura ao vivo — Rigol DM858E (tensão / resistência) e i2C C09 (diodo)</div>';
+  }
+  addEventListener('r2-meter-live', function () { vivo(); });
+  setInterval(vivo, 1000);
   function salvaGravar() {
     var gv = EL.querySelector('.gv'), s = seq(); if (!s || !s.active) return;
-    var p = { valBy: 'manual', valAt: Date.now() };
-    gv.querySelectorAll('input').forEach(function (i) { p[i.dataset.k] = i.value.trim() || undefined; });
+    var p = { valBy: 'manual', valAt: Date.now() }, st0 = (s.active.steps[s.pos] || {});
+    gv.querySelectorAll('input').forEach(function (i) { var x = i.value.trim(); if (x !== (st0[i.dataset.k] || '')) p[i.dataset.k + 's'] = x ? 'manual' : undefined; p[i.dataset.k] = x || undefined; });
     s.editStep(s.pos, p); gv.classList.remove('on'); ABA = 'lei'; pinta(true);
     toast('Leitura gravada no passo');
   }
@@ -2602,8 +2719,8 @@ window.__r2Esp = function (d, st) {
   function mk() {
     EL = document.createElement('div'); EL.id = 'r2fe';
     EL.innerHTML = '<div class="hd" title="Arraste por aqui para mover; o canto de baixo à direita muda o tamanho."><b>FICHA NO ESTUDO</b><span><button class="lk" data-a="min" title="Recolher na borda da tela">‹ recolher</button></span></div>' +
-      '<div class="os"></div><div class="tb"></div><div class="bd"></div><div class="gv"></div>' +
-      '<div class="ft"><button class="b" data-a="gravar" title="Digitar à mão a tensão, o diodo ou a resistência do passo atual."><i></i>Gravar leitura</button><button class="b" data-a="anotar" title="Escrever a nota do passo atual.">Anotar</button><button class="b p" data-a="enviar" title="Leva as notas deste estudo para os Achados da ficha (o bloco é atualizado a cada envio).">Enviar para a ficha</button></div>';
+      '<div class="os"></div><div class="vv"></div><div class="tb"></div><div class="bd"></div><div class="gv"></div>' +
+      '<div class="ft"><button class="b" data-a="limpar" title="Apaga as leituras do passo atual; a próxima leitura firme grava de novo.">Limpar e regravar</button><button class="b" data-a="gravar" title="Digitar à mão a tensão, o diodo ou a resistência do passo atual."><i></i>Gravar leitura</button><button class="b" data-a="anotar" title="Escrever a nota do passo atual.">Anotar</button><button class="b p" data-a="enviar" title="Leva as notas deste estudo para os Achados da ficha (o bloco é atualizado a cada envio).">Enviar para a ficha</button></div>';
     document.documentElement.appendChild(EL);   // fora do zoom do body (posição certa na tela)
     TAB = document.createElement('div'); TAB.id = 'r2fe-tab'; TAB.textContent = 'FICHA'; TAB.title = 'Abrir a ficha no estudo';
     TAB.addEventListener('click', function () { minimiza(false); });
@@ -2618,6 +2735,7 @@ window.__r2Esp = function (d, st) {
       if ((x = t.closest('[data-a]'))) {
         var a = x.dataset.a;
         if (a === 'min') minimiza(true);
+        else if (a === 'limpar') limpar(x.dataset.i != null ? +x.dataset.i : null, x.dataset.k || '');
         else if (a === 'gravar') gravar();
         else if (a === 'ok') salvaGravar();
         else if (a === 'anotar') { ABA = 'not'; pinta(true); var tn = document.getElementById('r2fe-nt'); if (tn) tn.focus(); }
@@ -2677,6 +2795,32 @@ window.__r2Esp = function (d, st) {
       SB.textContent = aberto ? '‹' : '›'; SB.title = aberto ? 'Recolher a barra lateral' : 'Abrir a barra lateral';
     }
     alca(); setInterval(alca, 700); addEventListener('resize', alca);
+    /* faixa de ícones: alça própria embaixo da alça da lista — « recolhe a faixa, » mostra de novo (lembra a escolha) */
+    var RB = document.createElement('div'); RB.id = 'r2rail-h'; document.documentElement.appendChild(RB);
+    function semRail(v) {
+      if (v === undefined) { try { v = localStorage.getItem('r2-sem-rail') === '1'; } catch (e) { v = false; } }
+      document.body && document.body.classList.toggle('r2-sem-rail', !!v);
+      try { localStorage.setItem('r2-sem-rail', v ? '1' : '0'); } catch (e) {}
+      setTimeout(function () { window.dispatchEvent(new Event('resize')); railAlca(); alca(); }, 60);
+    }
+    RB.addEventListener('click', function () { semRail(!document.body.classList.contains('r2-sem-rail')); });
+    function railAlca() {
+      var rail = document.querySelector('.activity-rail-left'), rr = rail && rail.getBoundingClientRect();
+      var escondida = document.body.classList.contains('r2-sem-rail');
+      if (!escondida && !(rr && rr.width > 0)) { RB.style.display = 'none'; return; }
+      var y = rr && rr.height > 0 ? rr.bottom - 44 : innerHeight - 80;
+      if (escondida) {   // sem a faixa: alça na borda esquerda da área do BoardRipper (ou da lista, se aberta)
+        var pan = document.querySelector('.sidebar-left'), rp = pan && pan.getBoundingClientRect();
+        RB.style.left = (rp && rp.width > 0 ? Math.max(0, rp.left - 1) : 0) + 'px';
+        RB.style.top = (innerHeight - 80) + 'px';
+        RB.textContent = '»'; RB.title = 'Mostrar a faixa de ícones do BoardRipper';
+      } else {
+        RB.style.left = rr.right + 'px'; RB.style.top = y + 'px';
+        RB.textContent = '«'; RB.title = 'Recolher a faixa de ícones do BoardRipper (o menu do SDS e a lista continuam)';
+      }
+      RB.style.display = 'flex';
+    }
+    semRail(); setInterval(railAlca, 700); addEventListener('resize', railAlca);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mk); else mk();
 })();

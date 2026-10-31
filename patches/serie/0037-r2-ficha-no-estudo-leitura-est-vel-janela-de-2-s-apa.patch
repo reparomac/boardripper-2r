@@ -1,0 +1,123 @@
+From 4074a61291f4b97a20f4804427c862eda67f8381 Mon Sep 17 00:00:00 2001
+From: 2R Tools <reparomacbr@gmail.com>
+Date: Sat, 31 Oct 2026 09:21:03 -0300
+Subject: [PATCH 37/37] =?UTF-8?q?r2:=20ficha=20no=20estudo=20=E2=80=94=20l?=
+ =?UTF-8?q?eitura=20est=C3=A1vel=20(janela=20de=202=20s),=20aparelho=20des?=
+ =?UTF-8?q?ativ=C3=A1vel,=20modo=20pelo=20visor=20do=20Cockpit,=20sem=20ca?=
+ =?UTF-8?q?rds=20azuis?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0196vWL6a9utUuFwJsxognuL
+---
+ src/frontend/src/r2/meter-store.ts | 42 +++++++++++++++++++++++-------
+ 1 file changed, 33 insertions(+), 9 deletions(-)
+
+diff --git a/src/frontend/src/r2/meter-store.ts b/src/frontend/src/r2/meter-store.ts
+index ec36589d..fe5f7d9d 100644
+--- a/src/frontend/src/r2/meter-store.ts
++++ b/src/frontend/src/r2/meter-store.ts
+@@ -43,7 +43,8 @@ export interface CapturePrefs {
+   soundSave: boolean;
+ }
+ const CAP_KEY = '2r-medicoes-captura';
+-const DEFAULT_CAP: CapturePrefs = { auto: true, holdMs: 1000, key: 'Enter', sound: true, soundSave: true };
++// 2R 31/10/2026 (Roger): captura com a leitura firme por 2 s (antes 1 s)
++const DEFAULT_CAP: CapturePrefs = { auto: true, holdMs: 2000, key: 'Enter', sound: true, soundSave: true };
+ 
+ const KEY = '2r-medicoes';
+ const TOL_KEY = '2r-medicoes-tol';
+@@ -218,6 +219,8 @@ export const meterStore = {
+  *  diodo — por isso as leituras de diodo dele entravam como tensão). */
+ export function modeFrom(unit: string, mode?: string): Mode {
+   const m = (mode || '').toLowerCase();
++  // 2R 31/10/2026: «outro» = o visor do Cockpit está num modo que a ficha não usa (capacitor, frequência…): não grava
++  if (m === 'outro') return 'outro' as Mode;
+   if (m.includes('diod')) return 'diodo';
+   if (m.includes('ohm') || m.includes('res') || m.includes('Ω')) return 'resistencia';
+   if (m.includes('volt') || m.includes('tens') || m.includes('dcv') || m.includes('acv')) return 'tensao';
+@@ -289,7 +292,9 @@ function capture(d: { value: number; unit: string; source: string; mode?: Mode }
+   const pin = part && sel?.pinIndex != null && sel.pinIndex >= 0 ? part.pins[sel.pinIndex] : null;
+   if (!tab || !part || !pin) {
+     if (cap.soundSave) playNotSaved();
+-    boardStore.addToast('Leitura ' + d.value.toFixed(3) + ' recebida — selecione o pino na placa para guardar.', 'info');
++    // 2R 31/10/2026 (Roger): sem os cards azuis das leituras (a ficha já mostra); __2rMeterToasts liga de volta
++    if ((window as unknown as Record<string, unknown>).__2rMeterToasts)
++      boardStore.addToast('Leitura ' + d.value.toFixed(3) + ' recebida — selecione o pino na placa para guardar.', 'info');
+     return;
+   }
+   const mode = d.mode ?? modeOf(d.unit);
+@@ -315,7 +320,7 @@ function capture(d: { value: number; unit: string; source: string; mode?: Mode }
+   if (cap.sound && !announced) { verdictSound(d.value, d.unit); delay = 420; }
+   announced = true;
+   if (cap.soundSave) window.setTimeout(playSaved, delay);
+-  boardStore.addToast(`${here}${m.via ? ` (medido em ${m.via})` : ''} (${m.net || 'sem net'}): ${d.value.toFixed(3)}`
++  if ((window as unknown as Record<string, unknown>).__2rMeterToasts) boardStore.addToast(`${here}${m.via ? ` (medido em ${m.via})` : ''} (${m.net || 'sem net'}): ${d.value.toFixed(3)}`
+     + (m.status === 'ok' ? ' — OK' : m.status === 'fora' ? ` — fora do esperado (${expStr})` : ''), m.status === 'fora' ? 'error' : 'info');
+   // Sequência de start ligada: a leitura também vai para a coluna do passo atual
+   if (guideStore.on && guideStore.recordValue(mode, d.value, d.unit, who, d.source)) return;
+@@ -326,10 +331,12 @@ function capture(d: { value: number; unit: string; source: string; mode?: Mode }
+ // 2R 30/10/2026 (Roger: «a leitura do multímetro está errada… tensão ou resistência a captura tem que ser pelo Rigol
+ // DM858E; modo diodo a leitura é feita pelo i2C C09»): o SDS manda as leituras dos DOIS aparelhos pela mesma porta,
+ // misturadas. Agora cada aparelho tem o seu estado de estabilidade e só vale: Rigol em tensão/resistência, C09 em diodo.
+-interface LiveIn { value: number | null; unit: string; text: string; kind?: string; mode?: string }
+-interface Est { since: number; ref: number | null; armed: boolean; lastCaptured: number | null; announced: boolean }
++interface LiveIn { value: number | null; unit: string; text: string; kind?: string; mode?: string; visor?: unknown }
++interface Est { since: number; ref: number | null; armed: boolean; lastCaptured: number | null; announced: boolean; run?: unknown }
++/** 2R 31/10/2026: regra de leitura estável da página do SDS (window.__2rEstavel, index.html) */
++type Estavel = (e: Est, v: number, t: number, mode: Mode, hold: number) => { reinicio?: boolean; bip?: boolean; pronto?: boolean; valor?: number };
+ const est: Record<string, Est> = {};
+-const liveBy: Record<string, { value: number | null; unit: string; text: string; mode: Mode; source: string; t: number; aceita: boolean }> = {};
++const liveBy: Record<string, { value: number | null; unit: string; text: string; mode: Mode; vz: unknown; source: string; t: number; aceita: boolean }> = {};
+ let liveSource = '';
+ let liveMode: Mode | null = null;
+ /** O som da leitura já tocou neste toque da ponta (aparelho da última leitura aceita). */
+@@ -338,8 +345,11 @@ function nomeAparelho(kind: string): string {
+   return kind === 'i2c' ? 'i2C C09' : kind === 'rigol' ? 'Rigol DM858E' : sourceName();
+ }
+ function aceita(kind: string, mode: Mode): boolean {
++  // 2R 31/10/2026 (Roger: «desativar o instrumento que não está usando»): aparelho desativado na ficha não grava
++  const off = (window as unknown as { __2rMeterOff?: Record<string, number> }).__2rMeterOff;
++  if (off && off[kind || 'm']) return false;
+   if (kind === 'i2c') return mode === 'diodo';
+-  if (kind === 'rigol') return mode !== 'diodo';
++  if (kind === 'rigol') return mode === 'tensao' || mode === 'resistencia';
+   return true;
+ }
+ function publicaLive() {
+@@ -351,14 +361,28 @@ function onLive(d: LiveIn) {
+   const kind = d.kind || '';
+   const mode = modeFrom(d.unit, d.mode);
+   const ok = aceita(kind, mode);
+-  liveBy[kind || 'm'] = { value: d.value, unit: d.unit, text: d.text, mode, source: nomeAparelho(kind), t: Date.now(), aceita: ok };
++  liveBy[kind || 'm'] = { value: d.value, unit: d.unit, text: d.text, mode, vz: d.visor || null, source: nomeAparelho(kind), t: Date.now(), aceita: ok };
+   publicaLive();
+   if (!ok) { emit(); return; }                     // aparelho no modo que não é dele: mostra, não grava
+   live = { value: d.value, unit: d.unit, text: d.text }; liveSource = nomeAparelho(kind); liveMode = mode; emit();
+   const e = est[kind] || (est[kind] = { since: 0, ref: null, armed: true, lastCaptured: null, announced: false });
+   const v = d.value;
+   const now = Date.now();
+-  if (v == null) { e.armed = true; e.ref = null; e.announced = false; announced = false; return; }   // ponta aberta: pronto para o próximo ponto
++  if (v == null) { e.armed = true; e.ref = null; e.run = null; e.announced = false; announced = false; return; }   // ponta aberta: pronto para o próximo ponto
++  // 2R 31/10/2026 (Roger: «os multímetros ficam oscilando… só levar em conta quando estabilizar»): a janela inteira
++  // tem que ficar numa faixa estreita (regra em window.__2rEstavel, no index.html do SDS)
++  const est2 = (window as unknown as { __2rEstavel?: Estavel }).__2rEstavel;
++  const E = est2 ? est2(e, v, now, mode, cap.holdMs) : null;
++  if (E) {
++    if (E.reinicio) { e.announced = false; announced = false; return; }
++    if (!e.announced && E.bip) { e.announced = true; if (cap.sound) verdictSound(v, d.unit); }
++    announced = e.announced;
++    if (cap.auto && e.armed && E.pronto) {
++      e.armed = false; e.lastCaptured = E.valor ?? v; e.run = null;
++      capture({ value: E.valor ?? v, unit: d.unit, source: nomeAparelho(kind), mode });
++    }
++    return;
++  }
+   if (!e.armed && e.lastCaptured !== null) {
+     const moved = Math.abs(v - e.lastCaptured) > Math.max(0.01, Math.abs(e.lastCaptured) * 0.1);
+     if (moved) { e.armed = true; e.announced = false; }
+-- 
+2.43.0
+
